@@ -1,8 +1,15 @@
 # Using it
 
+Most of this page is written against Windows, because that is where wincrust
+started and where the tool surface is widest. Nearly all of it applies to macOS
+too - the same seven tools, the same scopes, the same refusals. **[On macOS](#on-macos)**
+covers what differs, and it is worth reading first if that is your platform:
+the permissions, the three operations that are not supported, and one asymmetry
+that will otherwise look like a bug.
+
 ## First, the question worth asking: SSH or wincrust?
 
-If you already have SSH to the Windows machine, most of what you want is
+If you already have SSH to the machine, most of what you want is
 better done there. wincrust is not a general remote-access tool and is not
 trying to be - it runs elevated on a network socket, which is a real standing
 cost, and it should earn that.
@@ -36,6 +43,12 @@ So:
 The README puts it more bluntly, and it is the rule the tool surface was
 designed around: anything outside *"look at the desktop and act on a control"*
 belongs on the SSH side, where it is not running with an admin token.
+
+Session 0 is a Windows mechanism, but the division above is not. On macOS the
+same rule holds and the gate is different: not a session, but two permissions
+the operating system will not grant to a process nobody has approved. The
+symptom differs too - Windows gives you an empty window list, macOS gives you a
+clear refusal naming the setting to change.
 
 ## Trying it
 
@@ -130,7 +143,7 @@ A flat region means the content could not be captured. It does not mean the
 viewport is empty - that is a claim about the application, and nothing here
 supports it.
 
-### The elevation ceiling
+### The elevation ceiling (Windows)
 
 > There is an elevated Administrator console open. Can you read its title?
 
@@ -166,7 +179,10 @@ Expect a clean `not_found` - the target is genuinely absent. Distinct from
 `error`, which means the lookup itself failed and says nothing about the
 target. A caller that retries on one should not retry on the other.
 
-### Starting an application
+### Starting an application (Windows)
+
+`launch` is not supported on the macOS backend and says so; open the
+application yourself, or ask the agent to act on one already running.
 
 > Launch Notepad on my Windows machine.
 
@@ -201,6 +217,122 @@ surface somebody's in-progress work. Nothing here has gone wrong - it is what
 starting that application does - but a tool whose contract reads "start an
 app" can be surprising the first time it reopens a buffer from days ago.
 
+## On macOS
+
+Everything above still applies - discover before act, prefer selectors, expect
+refusals - with the differences below. Start here:
+
+```sh
+wincrust doctor
+```
+
+It is read-only: it never prompts and never changes a setting, because a
+diagnostic that fixes things cannot be trusted to describe them. You want
+`accessibility: true` and `screen_recording: true`.
+
+### The two permissions, and who they belong to
+
+System Settings → Privacy & Security → **Accessibility** *and* **Screen
+Recording**, then **restart the process** - macOS caches the decision per
+process, so a grant made while wincrust is running does not reach it.
+
+Grant them to whatever actually launches the binary. Run it from a terminal and
+the terminal is the trusted process, not wincrust. This is the single most
+common reason a first run reads the desktop as empty.
+
+### Three things it does not do
+
+`doctor` reports these as `false` and they are genuinely absent, not merely
+untested: `launch`, and `ocr_click` - the opt-in path where a click is aimed at
+a coordinate OCR read rather than at a control. Window-specific capture *is*
+supported; see below.
+
+### Window IDs are opaque, and only yours
+
+`hwnd` on macOS is a counter, not a `CGWindowID` and not a pointer. It is
+meaningful only to the wincrust process that issued it, and only while that
+process lives. Never persist one, and never compute with one. If a capture says
+*"call windows again"*, that is this: the handle is stale, and re-enumerating
+repairs it.
+
+### The asymmetry that looks like a bug
+
+**A `key` chord and a menu command are only processed while their application is
+frontmost.** Element-level actions - `click`, `type`, `select` - are not.
+
+macOS matches key equivalents in the *active* application, so a chord posted to
+a background app is delivered and discarded. `act` says so in `detail`, but
+still reports `ok`, because `ok` has always meant *dispatched* here.
+
+Menus are stricter: an inactive application reports most of its menu commands as
+disabled, and truthfully so - on a TextEdit window, 74 of 134 menu entities read
+disabled while the application was inactive, and 44 once it was frontmost.
+`Save`, `Copy` and `Paste` all read disabled while it was inactive, and
+`Make Rich Text` was observed flipping to enabled the moment it was not. So a
+menu command you can plainly see is available will be refused with `disabled`.
+
+`act` with `activate` is the fix for both. It brings the application forward and
+raises the window.
+
+### Menus live on the application, not the window
+
+Which is why they need their own knob. `discover` returns the top-level menu
+names by default for about 15% more response; `menu_depth: 3` returns every
+command inside them, and roughly quadruples the whole response - a Chrome window
+goes from 2,074 to 9,099 tokens. Worth paying once you know you need a menu
+command, not on every observation.
+
+You can `act` on a menu item directly: `AXPress` runs the command without
+opening the menu, so there is no animation to wait out and no focus change.
+
+Two guards apply. A menu command acts on whichever window the application has
+focused, so `act` refuses unless the scoped window *is* that window - otherwise
+a scope for one document could run "Save" against another.
+
+### Read one window, not the whole screen
+
+`observe` and `find_text` take an `hwnd`, and on macOS that is a real
+per-window capture rather than a crop:
+
+- **It reads nothing else.** A desktop-wide OCR survey on a shared or recorded
+  screen reads every application you have open and returns that text to the
+  caller. Scoping does not. If you take one thing from this section, take this
+  one.
+- **It sees covered windows.** ScreenCaptureKit renders the window itself, so a
+  window sitting behind another is readable where a desktop capture sees only
+  what is in front.
+- **It is about nine times cheaper** for the window you actually asked about.
+
+### Keyboard
+
+Alphanumeric chords require the US or ABC layout and are refused outright on any
+other, rather than silently sending a different shortcut. Named navigation keys
+are unaffected, and `type_keys` sends Unicode directly - layout independent,
+clipboard untouched, and the way to type anything that is not ASCII.
+
+### Scrolling
+
+`act` takes `scroll` with a named direction - `"down"`, or `"down 3"` for three
+wheel notches. Named rather than signed because "scroll down" moves the content
+*up*, and a caller that guesses wrong finds out by going the wrong way through a
+document. It is offered on things that actually scroll, and the event is placed
+over the element rather than wherever your mouse happens to be.
+
+### Running it
+
+There is no scheduled task and no elevation to arrange. Run the binary directly,
+or point an MCP client at it over stdio:
+
+```json
+"wincrust-mac": {
+  "command": "/path/to/wincrust",
+  "args": ["serve", "--transport", "stdio"]
+}
+```
+
+The `task` targets in `Taskfile.yml` are Windows-side; on macOS the CLI is the
+whole story.
+
 ## Reading the result
 
 `act` returns more than success or failure.
@@ -208,7 +340,8 @@ app" can be surprising the first time it reopens a buffer from days ago.
 - **`resolved_by`** - `selector` or `path` means a UI Automation control
   pattern did the work: a contract with the control. `ocr` means it clicked a
   coordinate where OCR read the text, which is a hope about geometry.
-- **`matched_by`** - how closely your text matched what Windows reported.
+- **`matched_by`** - how closely your text matched the label the platform
+  reported.
   `exact` and `case` mean it was found as written. `normalized` means
   composition or width had to be folded - that is the tier that makes `Tệp`
   typed on a Mac meet the same word reported by Windows. `affix` means
@@ -233,12 +366,22 @@ app" can be surprising the first time it reopens a buffer from days ago.
 | `launch` refuses | the name is not in the allowlist — the message reports how many entries were loaded, so `0 entries` means the file is missing or empty |
 | `launch` is permitted but nothing starts | the name is allowlisted but Windows cannot resolve it; use the full path to the .exe |
 | every `act` refuses | the emergency stop is engaged - see the README |
+| macOS: capture times out after 10s | ScreenCaptureKit is wedged, not slow. A wincrust process killed mid-capture leaves the daemon holding its stream and every later process blocks. `pgrep -fl "wincrust serve"`, end the strays, retry |
+| macOS: a visible menu command refuses as `disabled` | its application is not frontmost; `act` with `activate` first, then discover again |
+| macOS: `unknown window ID` | the handle predates the last enumeration, or the window moved or closed; call `windows` again |
+| macOS: empty window list, or a permission error | Accessibility is not granted to the process that launched wincrust; `wincrust doctor` reports both permissions |
 
 `task status` reports which session it is in. `task logs` tails the server log.
 
 ## Turning it off
 
-It does not have to run permanently to be useful. `task stop` costs nothing
-and `task start` brings it back in seconds. If weeks pass without needing the
-desktop, leaving an elevated network-listening process up is a standing risk
-with no matching benefit.
+It does not have to run permanently to be useful. On Windows, `task stop` costs
+nothing and `task start` brings it back in seconds. If weeks pass without
+needing the desktop, leaving an elevated network-listening process up is a
+standing risk with no matching benefit.
+
+On macOS there is no standing process to leave running: an MCP client starts the
+server over stdio and it exits with the client. The thing that persists is the
+two permissions, and those are worth revoking in System Settings if you stop
+using it - a granted Screen Recording permission is exactly as broad as it
+sounds.
