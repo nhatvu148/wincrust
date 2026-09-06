@@ -1,6 +1,6 @@
 # wincrust 🦀
 
-**Windows desktop automation over MCP — pure Rust, one 7 MB binary, seven tools, no shell.**
+**Windows and macOS desktop automation over MCP — pure Rust, one binary (7 MB Windows, 5 MB macOS), seven tools, no shell.**
 
 [![License: MIT OR Apache-2.0](https://img.shields.io/crates/l/wincrust.svg)](#licence)
 [![crates.io](https://img.shields.io/crates/v/wincrust.svg)](https://crates.io/crates/wincrust)
