@@ -129,7 +129,12 @@ pub fn prepare(spec: &str) -> Result<Vec<Key>> {
         .collect()
 }
 
+/// The same contract as `input::text_units` on Windows, checked before focus
+/// moves anywhere. An empty string is an error rather than a no-op success:
+/// silently reporting "ok" for input that was never sent is the one answer a
+/// caller cannot act on.
 pub fn validate_text(text: &str) -> Result<()> {
+    ensure!(!text.is_empty(), "no text to send");
     ensure!(
         text.encode_utf16().count() <= crate::input::MAX_TEXT_UNITS,
         "text exceeds input limit"
@@ -199,5 +204,11 @@ mod tests {
         assert!(validate_text(&"🦀".repeat(1024)).is_ok());
         assert!(validate_text(&"🦀".repeat(1025)).is_err());
         assert!(validate_text("a\0b").is_err());
+    }
+    /// Windows rejects this in `text_units`; taking focus and then reporting
+    /// success for zero keystrokes would be a different answer on each platform.
+    #[test]
+    fn empty_text_is_refused_like_windows() {
+        assert!(validate_text("").is_err());
     }
 }

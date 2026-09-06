@@ -12,6 +12,10 @@ use std::ptr::NonNull;
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::{Duration, Instant};
 
+/// Wall-clock ceiling on one tree walk. An unresponsive app must not hold the
+/// single engine thread, and every other caller behind it, for longer than this.
+const WALK_BUDGET: Duration = Duration::from_secs(5);
+
 fn check(e: AXError) -> Result<()> {
     ensure!(e == AXError::Success, "macOS accessibility error: {e:?}");
     Ok(())
@@ -182,7 +186,11 @@ fn entity(el: &AXUIElement, path: Vec<u32>, verbose: bool) -> Entity {
             .map(|b| (b.x + b.w / 2, b.y + b.h / 2))
             .unwrap_or_default(),
         actions: supported,
-        enabled: boolean(el, "AXEnabled").unwrap_or(false),
+        // Absent means "not a control", not "disabled". Windows' IsEnabled is
+        // always present; AXEnabled is published only by things that can be
+        // greyed out, so text areas, scroll areas, groups and windows omit it.
+        // Defaulting those to false made `act` refuse every one of them.
+        enabled: boolean(el, "AXEnabled").unwrap_or(true),
         path,
     }
 }
@@ -295,15 +303,33 @@ impl Desktop {
         let mut pending = vec![(w.el.clone(), vec![])];
         let mut truncated = None;
         let cap = a.max_elements.clamp(1, 2000);
+        // Name the limit that actually fired, and say how much is left behind.
+        // A caller that is only told "truncated" cannot tell a small window from
+        // a cut one, and the natural recovery - act on what you can see - is
+        // exactly how the wrong control gets clicked. `entities` is the filtered
+        // count, so `examined` is what the caps are really measured against.
         while let Some((el, path)) = pending.pop() {
-            if nodes.len() >= cap || start.elapsed() > Duration::from_secs(5) {
-                truncated = Some("element/time limit reached".into());
+            if nodes.len() >= cap {
+                truncated = Some(format!(
+                    "element cap {cap} reached; examined {}, at least {} not visited",
+                    nodes.len(),
+                    pending.len() + 1
+                ));
+                break;
+            }
+            if start.elapsed() > WALK_BUDGET {
+                truncated = Some(format!(
+                    "time budget {}ms reached; examined {}, at least {} not visited",
+                    WALK_BUDGET.as_millis(),
+                    nodes.len(),
+                    pending.len() + 1
+                ));
                 break;
             }
             let ent = entity(&el, path.clone(), a.verbose);
             nodes.push((el.clone(), ent));
             if path.len() >= a.max_depth.min(64) as usize {
-                truncated = Some("depth limit reached".into());
+                truncated = Some(format!("depth cap {} reached", a.max_depth));
                 continue;
             }
             if let Ok(children) = elements(&el, "AXChildren") {
@@ -457,9 +483,9 @@ impl Desktop {
             r.status = "identity_changed".into();
             bail!("element changed; discover again");
         }
-        if !current.enabled && current.control_type != "window" {
+        if !current.enabled {
             r.status = "disabled".into();
-            bail!("control is disabled or enabled state is unavailable");
+            bail!("control reports AXEnabled=false");
         }
         if !current.actions.contains(&a.action) {
             r.status = "pattern_gone".into();
@@ -469,6 +495,7 @@ impl Desktop {
             r.status = "stopped".into();
             bail!(crate::guard::refusal());
         }
+        let mut note: Option<&str> = None;
         match a.action.as_str() {
             "click" | "toggle" => press(&live, "AXPress")?,
             "raise" => press(&live, "AXRaise")?,
@@ -519,6 +546,23 @@ impl Desktop {
                     );
                 }
                 if let Some(keys) = keys {
+                    // Observed on TextEdit: a chord posted to a background app
+                    // is delivered and dropped, because a key equivalent is
+                    // matched by the *active* application. Unicode text is
+                    // inserted either way. The action still runs - there is no
+                    // activate verb to recover with - but "ok" here means
+                    // dispatched, and a caller re-reading an unchanged UI
+                    // deserves to know which of the two cases it is in.
+                    if NSWorkspace::sharedWorkspace()
+                        .frontmostApplication()
+                        .map(|app| app.processIdentifier())
+                        != Some(window.pid)
+                    {
+                        note = Some(
+                            "The target application was not frontmost; macOS may have discarded \
+                             this chord. Re-read the UI, or use type_keys, which is unaffected.",
+                        );
+                    }
                     crate::macos::input::send_prepared(window.pid, &keys)?;
                 } else {
                     crate::macos::input::send_text(window.pid, value)?;
@@ -528,7 +572,11 @@ impl Desktop {
         }
         r.ok = true;
         r.status = "ok".into();
-        r.detail=Some("Native action dispatched. Discover again to verify the resulting UI and obtain a fresh scope.".into());
+        let dispatched = "Native action dispatched. Discover again to verify the resulting UI and obtain a fresh scope.";
+        r.detail = Some(match note {
+            Some(n) => format!("{dispatched} {n}"),
+            None => dispatched.into(),
+        });
         // Do not mint a scope claiming that the pre-action paths are still current.
         Ok(())
     }
