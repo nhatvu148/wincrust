@@ -150,7 +150,9 @@ pub struct DiscoverArgs {
     /// command an application exposes sits at depth 3.
     ///
     /// Windows puts a window's menu in its own tree, so it is already covered
-    /// there and this is ignored.
+    /// there and this is ignored - which is exactly why the field is dead code
+    /// on that target, and why the allow is scoped to it rather than blanket.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub menu_depth: u32,
 }
 
