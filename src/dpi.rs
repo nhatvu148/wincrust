@@ -42,7 +42,27 @@ pub fn declare_awareness() {
     }
 }
 
-#[cfg(not(windows))]
+/// macOS has no DPI awareness to declare, but it does have an initialisation
+/// this has to happen before too.
+///
+/// ScreenCaptureKit's desktop-independent *window* filter reaches the window
+/// server, and a process that has never touched CoreGraphics aborts inside it
+/// with `CGS_REQUIRE_INIT` rather than returning an error. `serve` happened to
+/// be safe only because the emergency-stop watcher reads the cursor every
+/// 100ms and initialises CoreGraphics as a side effect; the one-shot CLI never
+/// starts that watcher, so `observe --hwnd` and `find-text --hwnd` aborted.
+///
+/// Worse than a crash: the abort leaves the capture daemon holding a stream for
+/// a dead client, and every later wincrust process then blocks until the
+/// strays are killed. So the cheapest documented CoreGraphics call is made here,
+/// at the one point every command passes through, rather than relying on an
+/// unrelated safety thread to have run first.
+#[cfg(target_os = "macos")]
+pub fn declare_awareness() {
+    let _ = objc2_core_graphics::CGMainDisplayID();
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn declare_awareness() {}
 
 /// What awareness the process ended up with.
