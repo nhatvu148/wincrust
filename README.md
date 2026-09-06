@@ -7,13 +7,21 @@
 [![rust](https://img.shields.io/badge/rust-1.96%2B-orange.svg)](https://www.rust-lang.org/)
 [![ci](https://github.com/nhatvu148/wincrust/actions/workflows/ci.yml/badge.svg)](https://github.com/nhatvu148/wincrust/actions/workflows/ci.yml)
 
-Let an agent see and drive a Windows desktop: enumerate windows, read a window's
-UI Automation tree, click and type through control patterns, wait for a control
+Let an agent see and drive a desktop: enumerate windows, read a window's
+accessibility tree, click and type through control patterns, wait for a control
 to appear, and read the screen with OCR when an application has no tree at all.
-It runs elevated, so it reaches windows a normal process cannot.
+On Windows that tree is UI Automation and the server runs elevated, so it
+reaches windows a normal process cannot; on macOS it is Accessibility, and the
+gate is two permissions rather than an integrity level.
 
-**win** for the platform, **crust** for the language — it contains *rust*, and
+**win** for the window, **crust** for the language — it contains *rust*, and
 crustacean is where *Rustacean* comes from.
+
+The window is the unit everything here is built on: you list windows, read the
+tree inside one, act on a control it contains, and capture one without reading
+the rest of the screen. That it also reads as *Windows* is fair enough — that is
+where this started, and where the elevation story still lives — but the thing
+the name points at works the same on both platforms.
 
 ```bash
 cargo install wincrust
