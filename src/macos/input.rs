@@ -1,6 +1,7 @@
 use crate::keys::*;
 use anyhow::{anyhow, ensure, Result};
-use objc2_core_graphics::{CGEvent, CGEventFlags};
+use objc2_core_foundation::CGPoint;
+use objc2_core_graphics::{CGEvent, CGEventFlags, CGScrollEventUnit};
 
 pub struct Key {
     code: u16,
@@ -210,5 +211,133 @@ mod tests {
     #[test]
     fn empty_text_is_refused_like_windows() {
         assert!(validate_text("").is_err());
+    }
+}
+
+/// One notch of a scroll wheel, in lines. Matches what a physical detent does,
+/// so "scroll down 3" means three notches rather than an opaque pixel count.
+const LINES_PER_NOTCH: i32 = 3;
+
+/// A parsed scroll request: how far to move, in lines, on each axis.
+pub struct Scroll {
+    pub vertical: i32,
+    pub horizontal: i32,
+}
+
+/// Parse `up`, `down`, `left`, `right`, optionally followed by a notch count.
+///
+/// Deliberately named directions rather than a signed number: the sign
+/// convention for a scroll wheel is genuinely ambiguous - "scroll down" moves
+/// the content up - and a caller that gets it backwards discovers this by
+/// scrolling the wrong way through a document.
+pub fn parse_scroll(spec: &str) -> Result<Scroll> {
+    let mut parts = spec.split_whitespace();
+    let direction = parts
+        .next()
+        .ok_or_else(|| anyhow!("scroll needs a direction: up, down, left or right"))?
+        .to_ascii_lowercase();
+    let notches: i32 = match parts.next() {
+        None => 1,
+        Some(n) => n
+            .parse()
+            .map_err(|_| anyhow!("scroll count {n:?} is not a number"))?,
+    };
+    ensure!(
+        parts.next().is_none(),
+        "scroll takes a direction and an optional count, e.g. \"down 3\""
+    );
+    ensure!(
+        (1..=100).contains(&notches),
+        "scroll count must be between 1 and 100"
+    );
+    let lines = notches * LINES_PER_NOTCH;
+    // Positive wheel1 scrolls the view up, which is what "scroll up" means.
+    Ok(match direction.as_str() {
+        "up" => Scroll {
+            vertical: lines,
+            horizontal: 0,
+        },
+        "down" => Scroll {
+            vertical: -lines,
+            horizontal: 0,
+        },
+        "left" => Scroll {
+            vertical: 0,
+            horizontal: lines,
+        },
+        "right" => Scroll {
+            vertical: 0,
+            horizontal: -lines,
+        },
+        other => {
+            return Err(anyhow!(
+                "unknown scroll direction {other:?}: use up, down, left or right"
+            ))
+        }
+    })
+}
+
+/// Send a scroll at a point, to one application.
+///
+/// The point matters: a scroll wheel event is dispatched to whatever view sits
+/// under it, so scrolling a specific pane means placing the event over that
+/// pane rather than wherever the user's mouse happens to be.
+pub fn send_scroll(pid: i32, at: (i32, i32), scroll: &Scroll) -> Result<()> {
+    ensure!(!crate::guard::engaged(), "{}", crate::guard::refusal());
+    let event = CGEvent::new_scroll_wheel_event2(
+        None,
+        CGScrollEventUnit::Line,
+        2,
+        scroll.vertical,
+        scroll.horizontal,
+        0,
+    )
+    .ok_or_else(|| anyhow!("cannot create scroll event"))?;
+    CGEvent::set_location(Some(&event), CGPoint::new(f64::from(at.0), f64::from(at.1)));
+    CGEvent::post_to_pid(pid, Some(&event));
+    Ok(())
+}
+
+#[cfg(test)]
+mod scroll_tests {
+    use super::*;
+
+    #[test]
+    fn a_bare_direction_is_one_notch() {
+        let s = parse_scroll("down").unwrap();
+        assert_eq!((s.vertical, s.horizontal), (-LINES_PER_NOTCH, 0));
+        assert_eq!(parse_scroll("up").unwrap().vertical, LINES_PER_NOTCH);
+    }
+
+    /// "down" must move the content the way a user means it, not the way the
+    /// wheel axis is signed.
+    #[test]
+    fn down_and_up_have_opposite_signs() {
+        assert!(parse_scroll("down").unwrap().vertical < 0);
+        assert!(parse_scroll("up").unwrap().vertical > 0);
+        assert!(parse_scroll("right").unwrap().horizontal < 0);
+        assert!(parse_scroll("left").unwrap().horizontal > 0);
+    }
+
+    #[test]
+    fn a_count_multiplies_notches() {
+        assert_eq!(
+            parse_scroll("down 4").unwrap().vertical,
+            -4 * LINES_PER_NOTCH
+        );
+    }
+
+    #[test]
+    fn it_refuses_what_it_cannot_mean() {
+        for bad in [
+            "", "sideways", "down 0", "down 101", "down -2", "down two", "down 3 4",
+        ] {
+            assert!(parse_scroll(bad).is_err(), "{bad:?} should be refused");
+        }
+    }
+
+    #[test]
+    fn direction_is_case_insensitive() {
+        assert_eq!(parse_scroll("DOWN").unwrap().vertical, -LINES_PER_NOTCH);
     }
 }

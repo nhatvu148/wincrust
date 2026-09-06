@@ -4,7 +4,7 @@ use super::*;
 use crate::lease::{now, Scope};
 use anyhow::{bail, ensure};
 use objc2::rc::autoreleasepool;
-use objc2_app_kit::NSWorkspace;
+use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication, NSWorkspace};
 use objc2_application_services::{AXError, AXIsProcessTrusted, AXUIElement, AXValue, AXValueType};
 use objc2_core_foundation::{CFArray, CFBoolean, CFRetained, CFString, CFType, CGPoint, CGSize};
 use std::collections::HashMap;
@@ -234,6 +234,21 @@ fn entity(el: &AXUIElement, path: Vec<u32>, verbose: bool) -> Entity {
     }
     if native.iter().any(|a| a == "AXRaise") {
         supported.push("raise".into());
+    }
+    // Offered where something can actually scroll. A wheel event would be
+    // delivered anywhere, but advertising it on a static label would be a lie
+    // about what the control does.
+    if role == "AXScrollArea"
+        || attr(el, "AXVerticalScrollBar").is_ok()
+        || attr(el, "AXHorizontalScrollBar").is_ok()
+    {
+        supported.push("scroll".into());
+    }
+    if role == "window" {
+        // Raising a window does not make its application active, and a key
+        // chord is only processed by the active application - so without this
+        // there is no in-band way to make `key` work.
+        supported.push("activate".into());
     }
     if settable(el, "AXFocused") || role == "window" {
         supported.extend(["key".into(), "type_keys".into()]);
@@ -635,6 +650,26 @@ impl Desktop {
         match a.action.as_str() {
             "click" | "toggle" => press(&live, "AXPress")?,
             "raise" => press(&live, "AXRaise")?,
+            "activate" => {
+                let app = NSRunningApplication::runningApplicationWithProcessIdentifier(window.pid)
+                    .ok_or_else(|| anyhow!("application is no longer running"))?;
+                ensure!(
+                    app.activateWithOptions(NSApplicationActivationOptions::ActivateAllWindows),
+                    "the application refused to activate"
+                );
+                // Activating brings the application forward; the caller asked
+                // about one window, so raise that one too where it is offered.
+                let _ = press(&live, "AXRaise");
+            }
+            "scroll" => {
+                let spec = a
+                    .value
+                    .as_deref()
+                    .ok_or_else(|| anyhow!("scroll requires value, e.g. \"down\" or \"down 3\""))?;
+                let scroll = crate::macos::input::parse_scroll(spec)?;
+                let at = current.click_at;
+                crate::macos::input::send_scroll(window.pid, at, &scroll)?;
+            }
             "type" => set(
                 &live,
                 "AXValue",

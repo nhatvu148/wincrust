@@ -366,8 +366,15 @@ different shortcut. Named navigation keys are unaffected, and `type_keys` sends
 Unicode directly — layout independent, clipboard untouched, and the way to type
 anything that is not ASCII.
 
+`act` also takes `scroll` — `"down"`, or `"down 3"` for three wheel notches,
+named rather than signed because "scroll down" moves the content *up* and a
+caller that guesses wrong finds out by going the wrong way through a document.
+It is offered on things that actually scroll, and the event is placed over the
+element rather than wherever the user's mouse happens to be.
+
 One asymmetry worth knowing before you build a loop on it: **a chord is only
-processed while its application is frontmost.** macOS matches key equivalents in
+processed while its application is frontmost.** `act` `activate` on a window is
+the in-band fix - it brings the application forward and raises that window. macOS matches key equivalents in
 the active app, so `cmd+a` posted to a background TextEdit is delivered and
 discarded. `type_keys` is inserted either way. `act` says so in `detail` when it
 notices, but it still reports `ok`, because `ok` has always meant *dispatched*
@@ -404,6 +411,8 @@ window:
 | `act` `click` | zoomed a window through `AXPress` |
 | selector resolution | matched at the `exact` tier and acted |
 | `act` on a menu | TextEdit Format ▸ Make Rich Text ran; the item flipped to Make Plain Text and the document became `.rtf` |
+| `act` `scroll` | reached the foot of a 100-section page; `find_text` then read the footer off the screen |
+| `act` `activate` | frontmost moved Finder → TextEdit, after which a `cmd+a` that had been discarded cleared the document |
 
 Two refusals were exercised deliberately, because a guard nobody has seen fire
 is a comment:
