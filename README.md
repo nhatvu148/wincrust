@@ -1,6 +1,6 @@
 # wincrust 🦀
 
-**Windows desktop automation over MCP — pure Rust, one 7 MB binary, seven tools, no shell.**
+**Windows and macOS desktop automation over MCP — pure Rust, one binary (7 MB Windows, 5 MB macOS), seven tools, no shell.**
 
 [![License: MIT OR Apache-2.0](https://img.shields.io/crates/l/wincrust.svg)](#licence)
 [![crates.io](https://img.shields.io/crates/v/wincrust.svg)](https://crates.io/crates/wincrust)
@@ -21,7 +21,9 @@ cargo install wincrust
 
 Driving it from another machine takes two more steps — see
 [below](#driving-it-from-another-machine). Already running? Start with
-[docs/USING.md](docs/USING.md).
+[docs/USING.md](docs/USING.md). On a Mac, start with [macOS](#macos) — the same
+tools run there over Accessibility, with three of them reported unsupported and
+`wincrust doctor` to tell you which.
 
 ## Why
 
@@ -327,6 +329,146 @@ artifacts would surface there.
 `wincrust displays` prints the process's DPI awareness and each monitor's real
 scale factor. If it reports `scale: 1.0` everywhere you have tested, you have not
 tested scaling — and a DPI-unaware build looks entirely healthy at 100%.
+
+## macOS
+
+An initial macOS backend ships alongside the Windows one: the same seven tools,
+the same signed scopes and the same MCP surface, over Accessibility
+(`AXUIElement`) instead of UI Automation, Core Graphics instead of `SendInput`,
+ScreenCaptureKit instead of the DWM, and Vision instead of `Windows.Media.Ocr`.
+
+Run `wincrust doctor` first. It reports the platform, both permissions and the
+capability set, and it is read-only — it never prompts and never changes a
+setting, because a diagnostic that fixes things cannot be trusted to describe
+them.
+
+```json
+{ "accessibility": true, "screen_recording": true, "screenshot_api_available": true,
+  "capabilities": { "launch": false, "window_capture": false, "ocr_click": false } }
+```
+
+**Permissions.** Grant *Accessibility* and *Screen Recording* in System Settings
+→ Privacy & Security, then **restart the process** — macOS caches the decision
+per process, so a grant made while wincrust is running does not reach it. Grant
+them to whatever actually launches the binary: run it from a terminal and the
+terminal is the trusted process, not wincrust.
+
+**Window IDs are opaque and process-local.** `hwnd` on macOS is a counter, not a
+`CGWindowID` and not a pointer. It is meaningful only to the wincrust process
+that issued it and only while that process lives. Never persist one, and never
+compute with one.
+
+**macOS 14+** for screenshots. Accessibility works below that; capture does not.
+
+**Keyboard.** Alphanumeric chords (`cmd+a`, `ctrl+shift+p`) currently require the
+US or ABC layout, and are refused outright on any other rather than sending a
+different shortcut. Named navigation keys are unaffected, and `type_keys` sends
+Unicode directly — layout independent, clipboard untouched, and the way to type
+anything that is not ASCII.
+
+`act` also takes `scroll` — `"down"`, or `"down 3"` for three wheel notches,
+named rather than signed because "scroll down" moves the content *up* and a
+caller that guesses wrong finds out by going the wrong way through a document.
+It is offered on things that actually scroll, and the event is placed over the
+element rather than wherever the user's mouse happens to be.
+
+One asymmetry worth knowing before you build a loop on it: **a chord is only
+processed while its application is frontmost.** `act` `activate` on a window is
+the in-band fix - it brings the application forward and raises that window. macOS matches key equivalents in
+the active app, so `cmd+a` posted to a background TextEdit is delivered and
+discarded. `type_keys` is inserted either way. `act` says so in `detail` when it
+notices, but it still reports `ok`, because `ok` has always meant *dispatched*
+here, not *worked*.
+
+**Menus.** macOS hangs an application's menus off the *application*, not the
+window, so a window-relative path cannot name a menu item and the menu bar -
+where most of a Mac application's capability lives - was unreachable. `discover`
+now walks it as a second root.
+
+Two things follow from menus belonging to the application rather than the
+window, and both are enforced. A menu command acts on whichever window the
+application currently has focused, so `act` refuses a menu-rooted action unless
+the scoped window *is* that focused window - otherwise a scope for one document
+would run "Save" against another. And macOS only enables an application's menu
+commands while it is frontmost: 74 of 134 menu entities on a TextEdit window
+report disabled when the application is inactive, 44 once it is not. `activate`
+is the fix for both.
+
+By default it returns just the menu names (`File`, `Edit`, `View`), which costs
+about 15% more response. Ask for `menu_depth: 3` and you get every command
+inside them, which you can `act` on directly - `AXPress` on a menu item performs
+the command without opening the menu. That is a separate knob from `max_depth`
+because it is worth paying for deliberately: on a Chrome window, depth 3 took
+the response from 2,074 to 9,099 tokens, and paying that on every observation
+would undo the reason a semantic backend beats a screenshot.
+
+### What is verified on macOS
+
+On a Mac with both permissions granted, against Chrome (chosen because its
+accessibility tree is the one least like a native app's) and a scratch TextEdit
+window:
+
+| | |
+|---|---|
+| `windows` | 34 windows across 9 applications, with names, pids and bounds |
+| `displays` | 2056×1329, `scale 2.0`, `dpi 144` |
+| `discover` (Chrome) | 400 elements in ~200 ms; 822 at depth 24 in ~360 ms |
+| `find_text` | matched with `click_at` across 151 lines, ~1.8 s |
+| `act` `type` | wrote the value, confirmed by re-reading the tree |
+| `act` `type_keys` | `Tiếng Việt 漢喃 🦀` delivered intact |
+| `act` `key` | `cmd+a` then `delete` cleared the document |
+| `act` `click` | zoomed a window through `AXPress` |
+| selector resolution | matched at the `exact` tier and acted |
+| `act` on a menu | TextEdit Format ▸ Make Rich Text ran; the item flipped to Make Plain Text and the document became `.rtf` |
+| `act` `scroll` | reached the foot of a 100-section page; `find_text` then read the footer off the screen |
+| `act` `activate` | frontmost moved Finder → TextEdit, after which a `cmd+a` that had been discarded cleared the document |
+| window `observe` | 673×439, ~393 tokens, against ~3,643 for the desktop |
+| window `find_text` | found text in a window that a desktop capture could not see, and found nothing from other windows |
+
+Two refusals were exercised deliberately, because a guard nobody has seen fire
+is a comment:
+
+- Acting on a **stale lease** after the UI changed under it returned
+  `identity_changed` and sent nothing. The value on screen was unchanged
+  afterwards.
+- Aiming a chord at a window that was **not its application's focused window**
+  returned `no keyboard input sent` — before any input, not after.
+- Replaying a **menu** lease after the command changed the item returned
+  `identity_changed`, and an out-of-range menu path returned `not_found`: the
+  second root is guarded exactly like the first.
+
+An application that stops answering is the case worth knowing about, because
+every AX request is synchronous on one shared engine thread. Requests are capped
+process-wide, and the cap shrinks with the remaining budget so a single
+unresponsive node cannot walk through it: against an application held in `T`
+state, `discover` returns inside its five-second budget rather than the 8.2 s it
+took when the cap was sized per request instead of per node. A window whose
+application merely stopped answering keeps its handle and its outstanding
+scopes — it is forgotten only when its application answers without listing it,
+or exits.
+
+**Reading one window.** `observe` and `find_text` take an `hwnd`, and on macOS
+that is a real per-window capture rather than a crop of the desktop:
+ScreenCaptureKit renders the window itself. Three consequences, all measured on
+one screen with a TextEdit window behind a full-width Safari window:
+
+- **It reads nothing else.** OCR scoped to Safari did not return a canary string
+  sitting in the TextEdit window. A desktop survey on a shared screen reads
+  every application the user has open and hands that text to the caller; this
+  does not.
+- **It sees covered windows.** The same canary was unreadable in a desktop
+  capture, because Safari was on top of it, and read correctly when scoped to
+  the TextEdit window.
+- **It is about nine times cheaper.** 673×439 at ~393 tokens against the whole
+  desktop's 2056×1329 at ~3,643.
+
+A window that has moved since the last `windows` call is refused - "0 shareable
+windows match ... call windows again" - rather than captured from wherever it
+used to be.
+
+Not verified: `scale 1.0`, more than one display, and any monitor sitting left
+of or above the primary. `launch` and `ocr_click` are reported unsupported by
+`doctor` and are genuinely absent.
 
 ## Limits
 

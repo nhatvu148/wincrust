@@ -105,7 +105,49 @@ pub fn spawn_watcher() {
         .expect("spawn estop watcher");
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+pub fn spawn_watcher() {
+    std::thread::Builder::new()
+        .name("wincrust-estop".into())
+        .spawn(|| {
+            let start = std::time::Instant::now();
+            let mut state = EstopState::default();
+            let mut was = false;
+            loop {
+                std::thread::sleep(Duration::from_millis(100));
+                let event = objc2_core_graphics::CGEvent::new(None);
+                // Failure to read the cursor disables input rather than removing
+                // the user's emergency stop without notice. This is the one place
+                // macOS deliberately differs from Windows, which treats an
+                // unreadable cursor as "not in the corner" and keeps running.
+                let Some(event) = event else {
+                    if !was {
+                        tracing::warn!("EMERGENCY STOP engaged (cursor position unreadable)");
+                        was = true;
+                    }
+                    ENGAGED.store(true, Ordering::Relaxed);
+                    continue;
+                };
+                let p = objc2_core_graphics::CGEvent::location(Some(&event));
+                let corner = p.x.abs() <= f64::from(CORNER_PX) && p.y.abs() <= f64::from(CORNER_PX);
+                let engaged = state.step(start.elapsed().as_millis() as u64, 100, corner);
+                // A safety latch that engages without saying so leaves an
+                // operator staring at a server that has silently stopped.
+                if engaged != was {
+                    if engaged {
+                        tracing::warn!("EMERGENCY STOP engaged (cursor parked at origin)");
+                    } else {
+                        tracing::warn!("emergency stop released");
+                    }
+                    was = engaged;
+                }
+                ENGAGED.store(engaged, Ordering::Relaxed);
+            }
+        })
+        .expect("spawn estop watcher");
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn spawn_watcher() {}
 
 /// Apps `launch` is permitted to start.
@@ -120,6 +162,9 @@ pub fn spawn_watcher() {}
 /// and the unlabelled replacement is trusted anyway. Holding one handle across
 /// both operations closes it.
 pub fn load_allowlist() -> Vec<String> {
+    if cfg!(target_os = "macos") {
+        return Vec::new();
+    }
     let path = allowlist_path();
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);

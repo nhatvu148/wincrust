@@ -13,9 +13,9 @@ env:
 
 jobs:
   check:
-    # wincrust is Windows-only by construction: UI Automation, SendInput and the
-    # mandatory-label APIs have no counterpart elsewhere, so there is nothing
-    # useful to gain from a Linux job.
+    # Windows and macOS each get a job because each is a real backend. There is
+    # still nothing to gain from a Linux job: with neither UI Automation nor
+    # Accessibility present, every path worth testing compiles out.
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -47,6 +47,54 @@ jobs:
           # Single-binary deployment is a stated goal; a jump here means a
           # dependency crept in that undercuts the reason this exists.
           if ($mb -gt 12) { throw "binary grew past 12 MB ($([math]::Round($mb,2)) MB)" }
+
+  # The macOS backend is ~1700 lines that no other job compiles: `check` and
+  # `arm64` both run on Windows, where all of it sits behind
+  # `cfg(target_os = "macos")`. Without this job the second platform is verified
+  # on exactly one machine - whichever one the author happened to build on.
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          # Apple Silicon is what `macos-latest` runs; Intel Macs are still a
+          # deployment target, and the risk there is the same as on Windows ARM
+          # - a dependency that does not cross-compile, not our own code.
+          targets: x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+
+      - name: fmt
+        run: cargo fmt --all -- --check
+
+      - name: clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: test
+        # Same constraint as the Windows job, for the same reason: a hosted
+        # runner has no interactive desktop and no Accessibility grant, so
+        # nothing in the suite touches the accessibility tree, screen capture
+        # or synthetic input. What it does cover is that the backend still
+        # compiles against the Apple SDKs and that the pure logic holds.
+        run: cargo test --all
+
+      - name: build release
+        run: cargo build --release
+
+      - name: binary size
+        run: |
+          bytes=$(stat -f%z target/release/wincrust)
+          mb=$(echo "scale=2; $bytes/1048576" | bc)
+          echo "wincrust: ${mb} MB"
+          # Same single-binary guard as the Windows job.
+          if [ "$(echo "$mb > 12" | bc)" -eq 1 ]; then
+            echo "binary grew past 12 MB (${mb} MB)" >&2
+            exit 1
+          fi
+
+      - name: check x86_64
+        run: cargo check --all-targets --target x86_64-apple-darwin
 
   # Windows on ARM is a real deployment target and nothing here is
   # architecture-specific - no intrinsics, no assembly - so the risk is a

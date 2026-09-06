@@ -42,7 +42,27 @@ pub fn declare_awareness() {
     }
 }
 
-#[cfg(not(windows))]
+/// macOS has no DPI awareness to declare, but it does have an initialisation
+/// this has to happen before too.
+///
+/// ScreenCaptureKit's desktop-independent *window* filter reaches the window
+/// server, and a process that has never touched CoreGraphics aborts inside it
+/// with `CGS_REQUIRE_INIT` rather than returning an error. `serve` happened to
+/// be safe only because the emergency-stop watcher reads the cursor every
+/// 100ms and initialises CoreGraphics as a side effect; the one-shot CLI never
+/// starts that watcher, so `observe --hwnd` and `find-text --hwnd` aborted.
+///
+/// Worse than a crash: the abort leaves the capture daemon holding a stream for
+/// a dead client, and every later wincrust process then blocks until the
+/// strays are killed. So the cheapest documented CoreGraphics call is made here,
+/// at the one point every command passes through, rather than relying on an
+/// unrelated safety thread to have run first.
+#[cfg(target_os = "macos")]
+pub fn declare_awareness() {
+    let _ = objc2_core_graphics::CGMainDisplayID();
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn declare_awareness() {}
 
 /// What awareness the process ended up with.
@@ -71,7 +91,12 @@ pub fn awareness() -> &'static str {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+pub fn awareness() -> &'static str {
+    "desktop-points (capture normalized to one pixel per point)"
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn awareness() -> &'static str {
     "n/a"
 }
@@ -128,7 +153,41 @@ pub fn displays() -> anyhow::Result<Vec<Display>> {
     Ok(out)
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+pub fn displays() -> anyhow::Result<Vec<Display>> {
+    use objc2_core_graphics::{
+        CGDisplayBounds, CGDisplayCopyDisplayMode, CGGetActiveDisplayList, CGMainDisplayID,
+    };
+    let mut ids = [0u32; 32];
+    let mut count = 0;
+    let status = unsafe { CGGetActiveDisplayList(32, ids.as_mut_ptr(), &mut count) };
+    anyhow::ensure!(status.0 == 0, "display enumeration failed: {status:?}");
+    Ok(ids[..count as usize]
+        .iter()
+        .enumerate()
+        .map(|(index, id)| {
+            let b = CGDisplayBounds(*id);
+            let scale = CGDisplayCopyDisplayMode(*id)
+                .map(|m| {
+                    objc2_core_graphics::CGDisplayMode::pixel_width(Some(&m)) as f64
+                        / objc2_core_graphics::CGDisplayMode::width(Some(&m)) as f64
+                })
+                .unwrap_or(1.0);
+            Display {
+                index,
+                x: b.origin.x.round() as i32,
+                y: b.origin.y.round() as i32,
+                width: b.size.width.round() as i32,
+                height: b.size.height.round() as i32,
+                primary: *id == CGMainDisplayID(),
+                dpi: (72.0 * scale).round() as u32,
+                scale,
+            }
+        })
+        .collect())
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn displays() -> anyhow::Result<Vec<Display>> {
     anyhow::bail!("displays requires Windows")
 }

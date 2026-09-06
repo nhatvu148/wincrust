@@ -37,7 +37,24 @@ pub struct DiscoverParams {
     pub filter: Option<String>,
     /// Cap on returned entities. Default 400.
     pub max_elements: Option<usize>,
+    /// macOS: how deep to walk the application's menu bar, where most of a Mac
+    /// app's capability lives.
+    ///
+    /// Default 1, which names the top-level menus - File, Edit, View - for
+    /// about 15% more response. Set 3 to see every command inside them, which
+    /// costs roughly four times the whole response and is worth paying once you
+    /// know you need a menu command. 0 skips menus entirely.
+    pub menu_depth: Option<u32>,
 }
+
+/// Names the menus without pricing every discover like a menu dump.
+///
+/// Depth 3 - the level that holds the actual commands - took a Chrome window
+/// from 2,074 to 9,099 tokens, on every observation, which would undo the
+/// reason a semantic backend beats a screenshot. Depth 1 costs 332 tokens,
+/// tells a caller which menus exist, and lets it ask for the contents of the
+/// one it wants.
+pub const DEFAULT_MENU_DEPTH: u32 = 1;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ActParams {
@@ -240,6 +257,27 @@ impl Wincrust {
         Self { engine, allowlist }
     }
 
+    /// Make a window handle's capture identity as young as the handle itself.
+    ///
+    /// macOS cannot convert one of our window IDs into a ScreenCaptureKit
+    /// window ID - no public API bridges an `AXUIElement` to a `CGWindowID` -
+    /// so capture matches on owning process, title and frame instead. Those are
+    /// only safe to match on while they are current: a window that closed and
+    /// was replaced by one with the same title at the same place would
+    /// otherwise be captured through the old handle. Re-enumerating here prunes
+    /// the closed window, so the stale handle is refused by name rather than
+    /// silently resolving to its replacement.
+    ///
+    /// Windows needs none of this: an HWND is the operating system's own handle.
+    #[cfg(target_os = "macos")]
+    async fn refresh_capture_identity(&self, hwnd: Option<isize>) {
+        if hwnd.is_some() {
+            let _ = self.engine.list_windows().await;
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    async fn refresh_capture_identity(&self, _hwnd: Option<isize>) {}
+
     #[tool(
         name = "windows",
         description = "List top-level windows with their handles, pids and bounds, including \
@@ -287,6 +325,7 @@ impl Wincrust {
                 ttl_secs: crate::lease::DEFAULT_TTL_SECS,
                 filter,
                 verbose: false,
+                menu_depth: p.menu_depth.unwrap_or(DEFAULT_MENU_DEPTH),
             })
             .await
             .map(Json)
@@ -307,6 +346,9 @@ impl Wincrust {
             return Err(McpError::internal_error(guard::refusal(), None));
         }
         let select = p.select.filter(|s| !s.is_empty());
+        if cfg!(target_os = "macos") && p.allow_ocr {
+            return Err(McpError::invalid_params("Automatic OCR clicks are not yet supported on macOS. Use find_text to survey text and act on discovered accessibility elements.", None));
+        }
         let ocr_query = p
             .allow_ocr
             .then(|| select.as_ref().and_then(|s| s.name.clone()))
@@ -369,6 +411,7 @@ impl Wincrust {
                     ttl_secs: crate::lease::DEFAULT_TTL_SECS,
                     filter: uia::Filter::Actionable,
                     verbose: false,
+                    menu_depth: 0,
                 })
                 .await
                 .ok();
@@ -386,6 +429,7 @@ impl Wincrust {
         let is_diff = detail == "diff";
         let max_width = p.max_width.unwrap_or(1400);
         let hwnd = p.hwnd;
+        self.refresh_capture_identity(hwnd).await;
         let (obs, png) =
             tokio::task::spawn_blocking(move || capture::observe_bytes(is_diff, max_width, hwnd))
                 .await
@@ -454,6 +498,7 @@ impl Wincrust {
                     ttl_secs: crate::lease::DEFAULT_TTL_SECS,
                     filter: uia::Filter::All,
                     verbose: false,
+                    menu_depth: 0,
                 })
                 .await;
 
@@ -607,6 +652,7 @@ impl Wincrust {
         let max = p.max_matches.unwrap_or(50);
         let hwnd = p.hwnd;
         let lang = p.lang;
+        self.refresh_capture_identity(hwnd).await;
         tokio::task::spawn_blocking(move || {
             ocr::find_text(ocr::FindArgs {
                 query: q.as_deref(),
@@ -641,6 +687,9 @@ impl Wincrust {
     ) -> Result<Json<LaunchResult>, McpError> {
         if guard::engaged() {
             return Err(McpError::internal_error(guard::refusal(), None));
+        }
+        if cfg!(target_os = "macos") {
+            return Err(McpError::invalid_params("Application launch is not yet supported by the macOS backend; open the application first.", None));
         }
         let want = p.name.trim().to_lowercase();
         if !self.allowlist.contains(&want) {
@@ -730,6 +779,13 @@ impl ServerHandler for Wincrust {
              - There is no shell here. For files, processes and commands, use SSH instead."
                 .into(),
         );
+        #[cfg(target_os = "macos")]
+        {
+            info.instructions = Some(format!(
+            "macOS desktop automation. Call windows, then discover before act. hwnd is an opaque process-local window ID, not a Win32 handle. Scopes expire within {} seconds and may be evicted; discover again after every action. Use only returned actions. A successful action means dispatched, not verified: inspect the resulting UI. Errors can occur after focus changes; do not retry blindly. Keys use Command/Control/Option explicitly. Screenshot and OCR coordinates are desktop points with a top-left origin. macOS 14+ is required for screenshots. Menus live on the application, not the window: discover returns the top-level menu names by default, and menu_depth=3 returns the commands inside them, which you can act on directly without opening the menu. Pass hwnd to observe and find_text to read one window instead of the desktop: it is far cheaper, it works even when the window is covered by another, and it does not read anything else on screen. Automatic OCR clicks and launch are not supported in this initial backend. Permissions: {}",
+            crate::lease::DEFAULT_TTL_SECS, crate::macos::diagnostics()
+        ));
+        }
         info
     }
 }

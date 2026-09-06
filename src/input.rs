@@ -26,6 +26,7 @@ use anyhow::{anyhow, Result};
 /// this crate. `origin` is negative when a monitor sits left of or above the
 /// primary, which is exactly the case no hardware here can exercise - so it is
 /// tested instead.
+#[cfg(any(windows, test))]
 pub(crate) fn to_normalized(v: i32, origin: i32, span: i32) -> i32 {
     (((v - origin) as f64) * 65535.0 / ((span - 1).max(1) as f64)).round() as i32
 }
@@ -161,11 +162,6 @@ pub fn send_keys(chords: &[crate::keys::Chord]) -> Result<()> {
     Ok(())
 }
 
-#[cfg(not(windows))]
-pub fn send_keys(_c: &[crate::keys::Chord]) -> Result<()> {
-    anyhow::bail!("synthetic keyboard input requires Windows")
-}
-
 /// A run of synthetic text is capped, for the same reason a run of chords is:
 /// one call must not become an unbounded stream of input the user cannot stop.
 /// Generous enough for a command line or a long path, which is the case this
@@ -180,6 +176,7 @@ pub const MAX_TEXT_UNITS: usize = 2048;
 /// delivers a lone surrogate rather than the character. Iterating `chars()`
 /// here instead of `encode_utf16()` is the mistake this function exists to
 /// make untestable-by-inspection into tested.
+#[cfg(any(windows, test))]
 pub(crate) fn text_units(s: &str) -> Result<Vec<u16>> {
     if s.is_empty() {
         return Err(anyhow!("no text to send"));
@@ -247,11 +244,6 @@ pub fn send_text(s: &str) -> Result<()> {
         );
     }
     Ok(())
-}
-
-#[cfg(not(windows))]
-pub fn send_text(_s: &str) -> Result<()> {
-    anyhow::bail!("synthetic keyboard input requires Windows")
 }
 
 #[cfg(test)]

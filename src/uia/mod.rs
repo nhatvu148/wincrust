@@ -13,6 +13,8 @@ use serde::{Deserialize, Serialize};
 use std::sync::mpsc::{self, Sender};
 use tokio::sync::oneshot;
 
+#[cfg(target_os = "macos")]
+pub(crate) mod mac;
 #[cfg(windows)]
 mod win;
 
@@ -35,7 +37,7 @@ pub struct WindowInfo {
     pub owned_by: Option<isize>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct Bounds {
     pub x: i32,
     pub y: i32,
@@ -139,6 +141,19 @@ pub struct DiscoverArgs {
     pub ttl_secs: u64,
     pub filter: Filter,
     pub verbose: bool,
+    /// How deep to walk the application's menu bar, or 0 to skip it.
+    ///
+    /// macOS only, and a separate knob from `max_depth` because menu trees are
+    /// shaped nothing like window trees: shallow, very broad, and with a deep
+    /// tail that is almost entirely dynamic lists - "Recent Items", "Open
+    /// With" - which change constantly and are rarely the target. Every static
+    /// command an application exposes sits at depth 3.
+    ///
+    /// Windows puts a window's menu in its own tree, so it is already covered
+    /// there and this is ignored - which is exactly why the field is dead code
+    /// on that target, and why the allow is scoped to it rather than blanket.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub menu_depth: u32,
 }
 
 /// What `act` did, and what it saw afterwards.
@@ -283,11 +298,6 @@ pub fn window_bounds(hwnd: isize) -> Result<Bounds> {
     })
 }
 
-#[cfg(not(windows))]
-pub fn window_bounds(_hwnd: isize) -> Result<Bounds> {
-    Err(anyhow!("requires Windows"))
-}
-
 /// Commands the COM thread understands. Each carries its own reply channel.
 enum Cmd {
     ListWindows(oneshot::Sender<Result<Vec<WindowInfo>>>),
@@ -320,7 +330,9 @@ impl Engine {
             .spawn(move || {
                 #[cfg(windows)]
                 win::run(rx, ready_tx, cfg);
-                #[cfg(not(windows))]
+                #[cfg(target_os = "macos")]
+                mac::run(rx, ready_tx, cfg);
+                #[cfg(not(any(windows, target_os = "macos")))]
                 {
                     let _ = (rx, cfg);
                     let _ = ready_tx.send(Err(anyhow!("wincrust requires Windows")));

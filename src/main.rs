@@ -4,6 +4,8 @@ mod guard;
 mod input;
 mod keys;
 mod lease;
+#[cfg(target_os = "macos")]
+mod macos;
 mod ocr;
 mod server;
 mod text;
@@ -16,7 +18,7 @@ use std::time::Instant;
 #[derive(Parser)]
 #[command(
     name = "wincrust",
-    about = "Elevated Windows desktop automation over MCP",
+    about = "Windows and macOS desktop automation over MCP",
     // Taken from Cargo.toml. `wincrust --version` is the first thing anyone
     // types after `cargo install`, and 0.1.0 answered it with a parse error.
     version
@@ -28,6 +30,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Report platform capabilities and permissions without touching the desktop.
+    Doctor,
     /// List top-level windows as JSON.
     Windows,
     /// Time repeated window enumerations.
@@ -146,12 +150,31 @@ enum Command {
         /// Include full bounds rects.
         #[arg(long)]
         verbose: bool,
+        /// macOS: how deep to walk the app's menu bar. 1 names the top-level
+        /// menus, 3 reaches every command in them, 0 skips menus.
+        #[arg(long, default_value_t = crate::server::DEFAULT_MENU_DEPTH)]
+        menu_depth: u32,
         /// Print only the summary, not every entity.
         #[arg(long)]
         summary: bool,
         #[arg(long, default_value_t = 1)]
         runs: u32,
     },
+}
+
+/// Fill the capture registry before a window-scoped screenshot.
+///
+/// On macOS a window handle only resolves to something ScreenCaptureKit can
+/// find once the accessibility engine has enumerated, because the handle names
+/// an `AXUIElement` and the bridge between the two is the identity enumeration
+/// records. The MCP server does this on every scoped capture; a one-shot CLI
+/// invocation never enumerated at all, so `--hwnd` failed with "unknown window
+/// ID" and there was no second command to fix it with.
+async fn resolve_capture_target(engine: &uia::Engine, hwnd: Option<isize>) -> Result<()> {
+    if hwnd.is_some() {
+        engine.list_windows().await?;
+    }
+    Ok(())
 }
 
 #[tokio::main]
@@ -172,6 +195,16 @@ async fn main() -> Result<()> {
     dpi::declare_awareness();
 
     let cli = Cli::parse();
+    if matches!(cli.cmd, Command::Doctor) {
+        #[cfg(target_os = "macos")]
+        println!("{}", serde_json::to_string_pretty(&macos::diagnostics())?);
+        #[cfg(not(target_os = "macos"))]
+        println!(
+            "{}",
+            serde_json::json!({"platform":std::env::consts::OS,"backend_available":cfg!(windows)})
+        );
+        return Ok(());
+    }
     let t0 = Instant::now();
     let lease_key = lease::new_key()?;
     let engine = uia::Engine::spawn(uia::EngineConfig { lease_key })?;
@@ -182,6 +215,7 @@ async fn main() -> Result<()> {
     );
 
     match cli.cmd {
+        Command::Doctor => unreachable!("handled before engine startup"),
         Command::Windows => {
             let w = engine.list_windows().await?;
             println!("{}", serde_json::to_string_pretty(&w)?);
@@ -232,6 +266,7 @@ async fn main() -> Result<()> {
             preprocess,
             lang,
         } => {
+            resolve_capture_target(&engine, hwnd).await?;
             let r = tokio::task::spawn_blocking(move || {
                 ocr::find_text(ocr::FindArgs {
                     query: query.as_deref(),
@@ -262,45 +297,49 @@ async fn main() -> Result<()> {
             watch,
             interval_ms,
             hwnd,
-        } => match detail.as_str() {
-            "text" => {
-                let wins = engine.list_windows().await?;
-                let d = engine
-                    .discover(uia::DiscoverArgs {
-                        hwnd: None,
-                        max_depth: 24,
-                        max_elements: 400,
-                        ttl_secs: 60,
-                        filter: uia::Filter::Actionable,
-                        verbose: false,
-                    })
-                    .await
-                    .ok();
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&serde_json::json!({
-                        "windows": wins.iter().map(|w| serde_json::json!({
-                            "name": w.name, "hwnd": w.hwnd, "pid": w.pid })).collect::<Vec<_>>(),
-                        "focused": d,
-                    }))?
-                );
-            }
-            "image" | "diff" => {
-                let is_diff = detail == "diff";
-                for i in 0..watch.max(1) {
-                    if i > 0 {
-                        tokio::time::sleep(std::time::Duration::from_millis(interval_ms)).await;
-                    }
-                    let out = out.clone();
-                    let o = tokio::task::spawn_blocking(move || {
-                        capture::observe(is_diff, max_width, out.as_deref(), hwnd)
-                    })
-                    .await??;
-                    println!("{}", serde_json::to_string(&o)?);
+        } => {
+            resolve_capture_target(&engine, hwnd).await?;
+            match detail.as_str() {
+                "text" => {
+                    let wins = engine.list_windows().await?;
+                    let d = engine
+                        .discover(uia::DiscoverArgs {
+                            hwnd: None,
+                            max_depth: 24,
+                            max_elements: 400,
+                            ttl_secs: 60,
+                            filter: uia::Filter::Actionable,
+                            verbose: false,
+                            menu_depth: 0,
+                        })
+                        .await
+                        .ok();
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "windows": wins.iter().map(|w| serde_json::json!({
+                                "name": w.name, "hwnd": w.hwnd, "pid": w.pid })).collect::<Vec<_>>(),
+                            "focused": d,
+                        }))?
+                    );
                 }
+                "image" | "diff" => {
+                    let is_diff = detail == "diff";
+                    for i in 0..watch.max(1) {
+                        if i > 0 {
+                            tokio::time::sleep(std::time::Duration::from_millis(interval_ms)).await;
+                        }
+                        let out = out.clone();
+                        let o = tokio::task::spawn_blocking(move || {
+                            capture::observe(is_diff, max_width, out.as_deref(), hwnd)
+                        })
+                        .await??;
+                        println!("{}", serde_json::to_string(&o)?);
+                    }
+                }
+                other => anyhow::bail!("unknown detail '{other}' (text|image|diff)"),
             }
-            other => anyhow::bail!("unknown detail '{other}' (text|image|diff)"),
-        },
+        }
         Command::Act {
             scope,
             path,
@@ -343,6 +382,7 @@ async fn main() -> Result<()> {
             ttl,
             filter,
             verbose,
+            menu_depth,
             summary,
             runs,
         } => {
@@ -358,6 +398,7 @@ async fn main() -> Result<()> {
                         ttl_secs: ttl,
                         filter,
                         verbose,
+                        menu_depth,
                     })
                     .await?;
                 ms.push(d.elapsed_ms);
