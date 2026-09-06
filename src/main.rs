@@ -150,6 +150,10 @@ enum Command {
         /// Include full bounds rects.
         #[arg(long)]
         verbose: bool,
+        /// macOS: how deep to walk the app's menu bar. 1 names the top-level
+        /// menus, 3 reaches every command in them, 0 skips menus.
+        #[arg(long, default_value_t = crate::server::DEFAULT_MENU_DEPTH)]
+        menu_depth: u32,
         /// Print only the summary, not every entity.
         #[arg(long)]
         summary: bool,
@@ -288,6 +292,7 @@ async fn main() -> Result<()> {
                         ttl_secs: 60,
                         filter: uia::Filter::Actionable,
                         verbose: false,
+                        menu_depth: 0,
                     })
                     .await
                     .ok();
@@ -358,6 +363,7 @@ async fn main() -> Result<()> {
             ttl,
             filter,
             verbose,
+            menu_depth,
             summary,
             runs,
         } => {
@@ -373,6 +379,7 @@ async fn main() -> Result<()> {
                         ttl_secs: ttl,
                         filter,
                         verbose,
+                        menu_depth,
                     })
                     .await?;
                 ms.push(d.elapsed_ms);

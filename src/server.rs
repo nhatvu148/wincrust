@@ -37,7 +37,24 @@ pub struct DiscoverParams {
     pub filter: Option<String>,
     /// Cap on returned entities. Default 400.
     pub max_elements: Option<usize>,
+    /// macOS: how deep to walk the application's menu bar, where most of a Mac
+    /// app's capability lives.
+    ///
+    /// Default 1, which names the top-level menus - File, Edit, View - for
+    /// about 15% more response. Set 3 to see every command inside them, which
+    /// costs roughly four times the whole response and is worth paying once you
+    /// know you need a menu command. 0 skips menus entirely.
+    pub menu_depth: Option<u32>,
 }
+
+/// Names the menus without pricing every discover like a menu dump.
+///
+/// Depth 3 - the level that holds the actual commands - took a Chrome window
+/// from 2,074 to 9,099 tokens, on every observation, which would undo the
+/// reason a semantic backend beats a screenshot. Depth 1 costs 332 tokens,
+/// tells a caller which menus exist, and lets it ask for the contents of the
+/// one it wants.
+pub const DEFAULT_MENU_DEPTH: u32 = 1;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ActParams {
@@ -287,6 +304,7 @@ impl Wincrust {
                 ttl_secs: crate::lease::DEFAULT_TTL_SECS,
                 filter,
                 verbose: false,
+                menu_depth: p.menu_depth.unwrap_or(DEFAULT_MENU_DEPTH),
             })
             .await
             .map(Json)
@@ -372,6 +390,7 @@ impl Wincrust {
                     ttl_secs: crate::lease::DEFAULT_TTL_SECS,
                     filter: uia::Filter::Actionable,
                     verbose: false,
+                    menu_depth: 0,
                 })
                 .await
                 .ok();
@@ -457,6 +476,7 @@ impl Wincrust {
                     ttl_secs: crate::lease::DEFAULT_TTL_SECS,
                     filter: uia::Filter::All,
                     verbose: false,
+                    menu_depth: 0,
                 })
                 .await;
 
@@ -739,7 +759,7 @@ impl ServerHandler for Wincrust {
         #[cfg(target_os = "macos")]
         {
             info.instructions = Some(format!(
-            "macOS desktop automation. Call windows, then discover before act. hwnd is an opaque process-local window ID, not a Win32 handle. Scopes expire within {} seconds and may be evicted; discover again after every action. Use only returned actions. A successful action means dispatched, not verified: inspect the resulting UI. Errors can occur after focus changes; do not retry blindly. Keys use Command/Control/Option explicitly. Screenshot and OCR coordinates are desktop points with a top-left origin. macOS 14+ is required for screenshots. Window capture, automatic OCR clicks and launch are not supported in this initial backend. Permissions: {}",
+            "macOS desktop automation. Call windows, then discover before act. hwnd is an opaque process-local window ID, not a Win32 handle. Scopes expire within {} seconds and may be evicted; discover again after every action. Use only returned actions. A successful action means dispatched, not verified: inspect the resulting UI. Errors can occur after focus changes; do not retry blindly. Keys use Command/Control/Option explicitly. Screenshot and OCR coordinates are desktop points with a top-left origin. macOS 14+ is required for screenshots. Menus live on the application, not the window: discover returns the top-level menu names by default, and menu_depth=3 returns the commands inside them, which you can act on directly without opening the menu. Window capture, automatic OCR clicks and launch are not supported in this initial backend. Permissions: {}",
             crate::lease::DEFAULT_TTL_SECS, crate::macos::diagnostics()
         ));
         }

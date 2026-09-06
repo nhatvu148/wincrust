@@ -373,6 +373,19 @@ discarded. `type_keys` is inserted either way. `act` says so in `detail` when it
 notices, but it still reports `ok`, because `ok` has always meant *dispatched*
 here, not *worked*.
 
+**Menus.** macOS hangs an application's menus off the *application*, not the
+window, so a window-relative path cannot name a menu item and the menu bar -
+where most of a Mac application's capability lives - was unreachable. `discover`
+now walks it as a second root.
+
+By default it returns just the menu names (`File`, `Edit`, `View`), which costs
+about 15% more response. Ask for `menu_depth: 3` and you get every command
+inside them, which you can `act` on directly - `AXPress` on a menu item performs
+the command without opening the menu. That is a separate knob from `max_depth`
+because it is worth paying for deliberately: on a Chrome window, depth 3 took
+the response from 2,074 to 9,099 tokens, and paying that on every observation
+would undo the reason a semantic backend beats a screenshot.
+
 ### What is verified on macOS
 
 On a Mac with both permissions granted, against Chrome (chosen because its
@@ -390,6 +403,7 @@ window:
 | `act` `key` | `cmd+a` then `delete` cleared the document |
 | `act` `click` | zoomed a window through `AXPress` |
 | selector resolution | matched at the `exact` tier and acted |
+| `act` on a menu | TextEdit Format ▸ Make Rich Text ran; the item flipped to Make Plain Text and the document became `.rtf` |
 
 Two refusals were exercised deliberately, because a guard nobody has seen fire
 is a comment:
@@ -399,6 +413,9 @@ is a comment:
   afterwards.
 - Aiming a chord at a window that was **not its application's focused window**
   returned `no keyboard input sent` — before any input, not after.
+- Replaying a **menu** lease after the command changed the item returned
+  `identity_changed`, and an out-of-range menu path returned `not_found`: the
+  second root is guarded exactly like the first.
 
 An application that stops answering is the case worth knowing about, because
 every AX request is synchronous on one shared engine thread. Requests are capped

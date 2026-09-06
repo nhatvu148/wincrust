@@ -141,6 +141,17 @@ pub struct DiscoverArgs {
     pub ttl_secs: u64,
     pub filter: Filter,
     pub verbose: bool,
+    /// How deep to walk the application's menu bar, or 0 to skip it.
+    ///
+    /// macOS only, and a separate knob from `max_depth` because menu trees are
+    /// shaped nothing like window trees: shallow, very broad, and with a deep
+    /// tail that is almost entirely dynamic lists - "Recent Items", "Open
+    /// With" - which change constantly and are rarely the target. Every static
+    /// command an application exposes sits at depth 3.
+    ///
+    /// Windows puts a window's menu in its own tree, so it is already covered
+    /// there and this is ignored.
+    pub menu_depth: u32,
 }
 
 /// What `act` did, and what it saw afterwards.

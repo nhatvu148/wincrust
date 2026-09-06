@@ -36,6 +36,28 @@ const AX_MIN_TIMEOUT: f32 = 0.05;
 /// against a 5s budget when the cap was sized to the request instead.
 const AX_REQUESTS_PER_NODE: f32 = 16.0;
 
+/// Path prefix marking a node reached through the application's menu bar
+/// rather than through the window.
+///
+/// macOS hangs an application's menus off `AXMenuBar` on the *application*
+/// element. A menu item is therefore not a descendant of any window, and a
+/// window-relative path cannot name one - which is why the menu bar, where
+/// most of a Mac application's capability lives, was unreachable. Rather than
+/// deepen every path with a root index, the exceptional root takes a sentinel
+/// no real child index can collide with.
+const MENU_ROOT: u32 = u32::MAX;
+
+/// The application's menu bar element, if it publishes one.
+///
+/// Agents and background applications do not, which is why this is allowed to
+/// fail quietly at the call site rather than failing a discovery.
+fn menu_bar(pid: i32) -> Result<CFRetained<AXUIElement>> {
+    let app = unsafe { AXUIElement::new_application(pid) };
+    attr(&app, "AXMenuBar")?
+        .downcast::<AXUIElement>()
+        .map_err(|_| anyhow!("AXMenuBar is not an element"))
+}
+
 fn check(e: AXError) -> Result<()> {
     ensure!(e == AXError::Success, "macOS accessibility error: {e:?}");
     Ok(())
@@ -389,6 +411,14 @@ impl Desktop {
             .ok_or_else(|| anyhow!("unknown window ID; call windows again"))?;
         let mut nodes = Vec::new();
         let mut pending = vec![(w.el.clone(), vec![])];
+        // Popped from the back, so the window is walked first and the menu bar
+        // takes whatever budget is left: a caller that hits the element cap
+        // should lose menus before it loses the window it asked about.
+        if a.menu_depth > 0 {
+            if let Ok(bar) = menu_bar(w.pid) {
+                pending.insert(0, (bar, vec![MENU_ROOT]));
+            }
+        }
         let mut truncated = None;
         let cap = a.max_elements.clamp(1, 2000);
         // Name the limit that actually fired, and say how much is left behind.
@@ -418,8 +448,14 @@ impl Desktop {
             self.cap(remaining.as_secs_f32() / AX_REQUESTS_PER_NODE);
             let ent = entity(&el, path.clone(), a.verbose);
             nodes.push((el.clone(), ent));
-            if path.len() >= a.max_depth.min(64) as usize {
-                truncated = Some(format!("depth cap {} reached", a.max_depth));
+            // The sentinel is a root marker, not a level, so it must not eat
+            // one of the caller's levels of depth - and menus get their own
+            // ceiling, being broad where windows are deep.
+            let via_menu = path.first() == Some(&MENU_ROOT);
+            let depth = path.len() - usize::from(via_menu);
+            let limit = if via_menu { a.menu_depth } else { a.max_depth };
+            if depth >= limit.min(64) as usize {
+                truncated = Some(format!("depth cap {limit} reached"));
                 continue;
             }
             if let Ok(children) = elements(&el, "AXChildren") {
@@ -561,8 +597,13 @@ impl Desktop {
             .windows
             .get(&scope.hwnd)
             .ok_or_else(|| anyhow!("window closed"))?;
-        let mut live = window.el.clone();
-        for index in &expected.path {
+        let via_menu = expected.path.first() == Some(&MENU_ROOT);
+        let mut live = if via_menu {
+            menu_bar(window.pid)?
+        } else {
+            window.el.clone()
+        };
+        for index in expected.path.iter().skip(usize::from(via_menu)) {
             live = elements(&live, "AXChildren")?
                 .get(*index as usize)
                 .cloned()
