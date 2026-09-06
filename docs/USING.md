@@ -192,6 +192,13 @@ it means `launch` does nothing useful until someone fills the file -
 `%LOCALAPPDATA%\wincrust\launch-allowlist.txt`, one name per line, or
 `-Allow name1,name2` when running the setup script.
 
+**The file is read once, when the server starts.** Editing it on a running
+server changes nothing until that server restarts, and the refusal you get
+meanwhile is identical to the one for a name that was never allowlisted. The
+setup script's `-Allow` avoids the trap by re-registering the task, which
+restarts the server as a side effect; editing the file by hand does not, so
+follow it with `-Stop` then `-Start`.
+
 **Being allowlisted and being resolvable are two separate things.** The
 allowlist decides whether the call is permitted; Windows then has to find the
 application. A name resolves only if it is on `PATH` or registered under
@@ -364,6 +371,7 @@ whole story.
 | connects, but zero windows | the server is in session 0 - it was not started through the scheduled task |
 | OCR says "the session is locked" | the machine is locked; a capture there returns the lock screen |
 | `launch` refuses | the name is not in the allowlist — the message reports how many entries were loaded, so `0 entries` means the file is missing or empty |
+| `launch` still refuses a name you just added | the allowlist is read once at startup; the running server still holds the old list. Restart it, or use setup's `-Allow`. The entry count in the message is the loaded one, not what is on disk |
 | `launch` is permitted but nothing starts | the name is allowlisted but Windows cannot resolve it; use the full path to the .exe |
 | every `act` refuses | the emergency stop is engaged - see the README |
 | macOS: capture times out after 10s | ScreenCaptureKit is wedged, not slow. A wincrust process killed mid-capture leaves the daemon holding its stream and every later process blocks. `pgrep -fl "wincrust serve"`, end the strays, retry |

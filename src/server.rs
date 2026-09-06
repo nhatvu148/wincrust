@@ -253,6 +253,10 @@ impl Wincrust {
     /// The allowlist is loaded once by the caller and shared. Loading it here
     /// would re-read the file and repeat a security-relevant syscall
     /// (`SetSecurityInfo`) on every new HTTP session.
+    ///
+    /// The cost of that choice is paid by whoever edits the file on a running
+    /// server and sees nothing change, so `launch`'s refusal says to restart
+    /// rather than only naming the file. Keep the two in step.
     pub fn new(engine: uia::Engine, allowlist: std::sync::Arc<Vec<String>>) -> Self {
         Self { engine, allowlist }
     }
@@ -696,9 +700,11 @@ impl Wincrust {
             return Err(McpError::invalid_params(
                 format!(
                     "'{}' is not in the launch allowlist ({} entries). Add it to \
-                     %LOCALAPPDATA%\\wincrust\\launch-allowlist.txt on the host - and use the \
-                     full path to the .exe unless the name is on PATH or registered under App \
-                     Paths, since an allowlisted name Windows cannot resolve will still fail.",
+                     %LOCALAPPDATA%\\wincrust\\launch-allowlist.txt on the host, then restart \
+                     the server: the file is read once at startup, so editing it alone changes \
+                     nothing here. Re-running the setup script with -Allow does both. And use \
+                     the full path to the .exe unless the name is on PATH or registered under \
+                     App Paths, since an allowlisted name Windows cannot resolve will still fail.",
                     p.name,
                     self.allowlist.len()
                 ),

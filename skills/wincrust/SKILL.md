@@ -125,6 +125,10 @@ showing.
   file is empty until someone fills it. If a name is refused, say so and name
   the file - `%LOCALAPPDATA%\wincrust\launch-allowlist.txt`, or re-run setup
   with `-Allow <name>`. Do not look for another way to start a process.
+  Tell them the file is read once at startup, so a hand edit needs a server
+  restart to take effect; setup's `-Allow` restarts it for them. Saying only
+  "add it to the file" sends someone to make an edit that does nothing, and
+  the second refusal looks identical to the first.
   Allowlisted is not the same as resolvable: Windows finds a bare name only on
   `PATH` or under `App Paths`, so anything under `Program Files` needs its full
   path. A name that is permitted but unresolvable fails while looking allowed.
