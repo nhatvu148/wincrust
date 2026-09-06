@@ -1,16 +1,24 @@
 [package]
 name = "wincrust"
-version = "0.4.1"
+version = "0.5.0"
 edition = "2021"
-description = "Windows desktop automation over MCP. Pure Rust, single binary, seven tools, no shell."
+description = "Windows and macOS desktop automation over MCP. Pure Rust, single binary, seven tools, no shell."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/nhatvu148/wincrust"
 readme = "README.md"
 authors = ["Nhat Vu <nhatvu148@gmail.com>"]
 # Discovery on crates.io is driven by keywords and categories far more than by
 # the crate name, so these carry the weight the name does not.
-keywords = ["mcp", "windows", "automation", "uia", "accessibility"]
-categories = ["os::windows-apis", "command-line-utilities", "accessibility"]
+# Five is the cap, so "uia" gave way to "macos": it named one platform's API by
+# an acronym only people already using it would search for, where the other
+# names a platform this now supports.
+keywords = ["mcp", "windows", "macos", "automation", "accessibility"]
+categories = [
+    "os::windows-apis",
+    "os::macos-apis",
+    "command-line-utilities",
+    "accessibility",
+]
 # The oldest toolchain this has actually been built on, and deliberately
 # conservative: the highest MSRV any dependency declares is image's 1.88, so the
 # true floor is somewhere at or below that. Nothing between 1.88 and 1.96 has
@@ -25,12 +33,13 @@ rust-version = "1.96"
 # `observe --out` test.
 include = ["src/**/*.rs", "Cargo.toml", "README.md", "LICENSE-MIT", "LICENSE-APACHE"]
 
-# docs.rs builds on x86_64-unknown-linux-gnu by default. Every Windows API this
-# crate is built on is absent there, so the docs build would fail and crates.io
-# would show a red "build failed" beside a crate that is perfectly healthy on
-# the only platform it claims. Pin the docs build to the target it supports.
+# docs.rs builds on x86_64-unknown-linux-gnu by default. Neither backend's APIs
+# exist there, so the docs build would fail and crates.io would show a red
+# "build failed" beside a crate that is healthy on both platforms it claims.
+# Pin it to the targets it actually supports; Windows stays the default because
+# it is still the larger surface.
 [package.metadata.docs.rs]
-targets = ["x86_64-pc-windows-msvc"]
+targets = ["x86_64-pc-windows-msvc", "aarch64-apple-darwin"]
 default-target = "x86_64-pc-windows-msvc"
 
 [dependencies]
