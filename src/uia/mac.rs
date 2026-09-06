@@ -151,6 +151,31 @@ pub(super) fn bounds(el: &AXUIElement) -> Result<Bounds> {
     })
 }
 
+/// Longest name this backend will report.
+///
+/// AXValue is the last name fallback, and for a text area AXValue is the entire
+/// document. An unlabelled terminal or editor pane therefore hands back its
+/// whole scrollback as a control's "name": measured at 2,236,997 characters for
+/// one Warp window, which turned a *five-entity* discover into 2.4 MB of JSON
+/// and roughly 600,000 tokens - past any context window, and orders of
+/// magnitude worse than the screenshot this exists to replace.
+///
+/// Windows cannot reach this state: it names controls from the UIA Name
+/// property and never falls back to a value.
+const MAX_NAME_CHARS: usize = 120;
+
+/// Bound a name at a character boundary, marking that something was cut.
+///
+/// Char-indexed rather than byte-indexed because these names are routinely not
+/// ASCII - a Japanese menu label would panic a byte truncate.
+fn clip(mut s: String) -> String {
+    if let Some((end, _)) = s.char_indices().nth(MAX_NAME_CHARS) {
+        s.truncate(end);
+        s.push('\u{2026}');
+    }
+    s
+}
+
 fn entity(el: &AXUIElement, path: Vec<u32>, verbose: bool) -> Entity {
     let role = string(el, "AXRole");
     let role = match role.as_str() {
@@ -191,11 +216,13 @@ fn entity(el: &AXUIElement, path: Vec<u32>, verbose: bool) -> Entity {
     if settable(el, "AXFocused") || role == "window" {
         supported.extend(["key".into(), "type_keys".into()]);
     }
-    let name = ["AXTitle", "AXDescription", "AXHelp", "AXValue"]
-        .into_iter()
-        .map(|n| string(el, n))
-        .find(|s| !s.is_empty())
-        .unwrap_or_default();
+    let name = clip(
+        ["AXTitle", "AXDescription", "AXHelp", "AXValue"]
+            .into_iter()
+            .map(|n| string(el, n))
+            .find(|s| !s.is_empty())
+            .unwrap_or_default(),
+    );
     let b = bounds(el).ok();
     Entity {
         name,
@@ -673,5 +700,39 @@ pub(super) fn run(rx: Receiver<Cmd>, ready: Sender<Result<()>>, cfg: EngineConfi
                 let _ = reply.send(desktop.act(args));
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{clip, MAX_NAME_CHARS};
+
+    /// The case that motivated the cap: a text area reports its whole document
+    /// as AXValue, and AXValue is the last name fallback.
+    #[test]
+    fn a_scrollback_sized_value_does_not_become_a_name() {
+        let huge = "x".repeat(2_236_997);
+        let out = clip(huge);
+        assert_eq!(
+            out.chars().count(),
+            MAX_NAME_CHARS + 1,
+            "cap plus the ellipsis"
+        );
+        assert!(out.ends_with('\u{2026}'));
+    }
+
+    /// Names are routinely not ASCII, and a byte truncate would panic here.
+    #[test]
+    fn it_cuts_on_character_boundaries() {
+        let out = clip("\u{6f22}".repeat(MAX_NAME_CHARS * 2));
+        assert_eq!(out.chars().count(), MAX_NAME_CHARS + 1);
+        assert!(out.starts_with('\u{6f22}'));
+    }
+
+    #[test]
+    fn a_short_name_is_untouched() {
+        assert_eq!(clip("Save".into()), "Save");
+        let exact = "y".repeat(MAX_NAME_CHARS);
+        assert_eq!(clip(exact.clone()), exact, "no ellipsis at exactly the cap");
     }
 }
