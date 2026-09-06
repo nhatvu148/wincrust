@@ -400,6 +400,16 @@ is a comment:
 - Aiming a chord at a window that was **not its application's focused window**
   returned `no keyboard input sent` — before any input, not after.
 
+An application that stops answering is the case worth knowing about, because
+every AX request is synchronous on one shared engine thread. Requests are capped
+process-wide, and the cap shrinks with the remaining budget so a single
+unresponsive node cannot walk through it: against an application held in `T`
+state, `discover` returns inside its five-second budget rather than the 8.2 s it
+took when the cap was sized per request instead of per node. A window whose
+application merely stopped answering keeps its handle and its outstanding
+scopes — it is forgotten only when its application answers without listing it,
+or exits.
+
 Not verified: `scale 1.0`, more than one display, and any monitor sitting left
 of or above the primary. `launch`, `window_capture` and `ocr_click` are reported
 unsupported by `doctor` and are genuinely absent — `find_text` on macOS is a

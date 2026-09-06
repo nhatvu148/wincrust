@@ -12,9 +12,29 @@ use std::ptr::NonNull;
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::{Duration, Instant};
 
-/// Wall-clock ceiling on one tree walk. An unresponsive app must not hold the
-/// single engine thread, and every other caller behind it, for longer than this.
+/// Wall-clock ceiling on one operation - enumeration and walk together, not
+/// each. An unresponsive app must not hold the single engine thread, and every
+/// other caller queued behind it, for longer than this.
 const WALK_BUDGET: Duration = Duration::from_secs(5);
+
+/// Ceiling on a single AX request, so the budget above is enforceable at all.
+///
+/// A responsive application answers an attribute read in tens of microseconds,
+/// so this is four orders of magnitude of headroom; the default is six seconds,
+/// and `entity()` makes fourteen requests per node.
+const AX_REQUEST_TIMEOUT: f32 = 0.5;
+
+/// Floor for the same, because the system-wide object reads a timeout of zero
+/// as "reset to the default" - the opposite of what shrinking it means here.
+const AX_MIN_TIMEOUT: f32 = 0.05;
+
+/// Upper bound on the AX requests one node costs: role, actions, four
+/// settability probes, four name candidates, identifier, position, size,
+/// enabled, and the child fetch. The deadline is only checked *between* nodes,
+/// so the per-request cap has to be the remaining budget divided by this or a
+/// single unresponsive node walks straight through it - measured at 8.2s
+/// against a 5s budget when the cap was sized to the request instead.
+const AX_REQUESTS_PER_NODE: f32 = 16.0;
 
 fn check(e: AXError) -> Result<()> {
     ensure!(e == AXError::Success, "macOS accessibility error: {e:?}");
@@ -211,22 +231,55 @@ struct Desktop {
     next_generation: u64,
     snapshots: HashMap<u64, Snapshot>,
     key: Vec<u8>,
+    /// Held rather than recreated because it is the only handle through which
+    /// a request timeout can be set process-wide. See `cap`.
+    system: CFRetained<AXUIElement>,
 }
 
 impl Desktop {
-    fn list(&mut self) -> Result<Vec<WindowInfo>> {
+    /// Cap every subsequent AX request from this process at `seconds`.
+    ///
+    /// Only the system-wide object does this globally. Setting a timeout on an
+    /// application element binds *that reference* and nothing else - not the
+    /// windows it returned, not its children, not an equal element created
+    /// later. So the per-application call this replaces bounded exactly one
+    /// request, `AXWindows` on a temporary handle, and left the tree walk and
+    /// `act`'s path re-walk running on the six-second default.
+    ///
+    /// Deadline checks between units of work bound the total; this bounds the
+    /// unit. Neither works without the other: a check between nodes cannot
+    /// interrupt a node already blocked inside a request.
+    fn cap(&self, seconds: f32) {
+        unsafe {
+            self.system
+                .set_messaging_timeout(seconds.clamp(AX_MIN_TIMEOUT, AX_REQUEST_TIMEOUT));
+        }
+    }
+
+    fn list(&mut self, deadline: Instant) -> Result<Vec<WindowInfo>> {
         ensure!(trusted(), "Accessibility permission missing. Grant the host application or installed Wincrust executable access in System Settings > Privacy & Security > Accessibility, then restart it.");
+        self.cap(AX_REQUEST_TIMEOUT);
         let apps = NSWorkspace::sharedWorkspace().runningApplications();
+        // Cheap and AX-free: who is running at all, as opposed to who answered.
+        let running: Vec<i32> = apps.iter().map(|a| a.processIdentifier()).collect();
         let mut live = Vec::new();
+        let mut asked = Vec::new();
         for app in apps {
+            if Instant::now() >= deadline {
+                tracing::warn!(
+                    "window enumeration hit the {}s budget after {} of {} applications",
+                    WALK_BUDGET.as_secs(),
+                    asked.len(),
+                    running.len()
+                );
+                break;
+            }
             let pid = app.processIdentifier();
             let root = unsafe { AXUIElement::new_application(pid) };
-            unsafe {
-                root.set_messaging_timeout(0.5);
-            }
             let Ok(windows) = elements(&root, "AXWindows") else {
                 continue;
             };
+            asked.push(pid);
             for el in windows {
                 let id = self
                     .windows
@@ -251,7 +304,14 @@ impl Desktop {
                 live.push(id);
             }
         }
-        self.windows.retain(|id, _| live.contains(id));
+        // Forget a window only when the application it belongs to answered and
+        // did not list it, or when that application is gone. An application
+        // that was unreachable, or that the budget cut us off before reaching,
+        // keeps its windows: evicting them would invalidate outstanding scopes
+        // and report "window closed" for a window that is still on screen.
+        self.windows.retain(|id, w| {
+            running.contains(&w.pid) && (live.contains(id) || !asked.contains(&w.pid))
+        });
         Ok(live
             .into_iter()
             .filter_map(|id| self.info(id).ok())
@@ -276,7 +336,8 @@ impl Desktop {
 
     fn discover(&mut self, a: DiscoverArgs) -> Result<Discovery> {
         let start = Instant::now();
-        self.list()?;
+        let deadline = start + WALK_BUDGET;
+        self.list(deadline)?;
         let id = match a.hwnd {
             Some(id) => id,
             None => {
@@ -317,7 +378,8 @@ impl Desktop {
                 ));
                 break;
             }
-            if start.elapsed() > WALK_BUDGET {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
                 truncated = Some(format!(
                     "time budget {}ms reached; examined {}, at least {} not visited",
                     WALK_BUDGET.as_millis(),
@@ -326,6 +388,7 @@ impl Desktop {
                 ));
                 break;
             }
+            self.cap(remaining.as_secs_f32() / AX_REQUESTS_PER_NODE);
             let ent = entity(&el, path.clone(), a.verbose);
             nodes.push((el.clone(), ent));
             if path.len() >= a.max_depth.min(64) as usize {
@@ -369,8 +432,11 @@ impl Desktop {
                 nodes,
             },
         );
+        let window = self.info(id).map_err(|e| {
+            anyhow!("window is unreadable; its application may be unresponsive ({e})")
+        })?;
         Ok(Discovery {
-            window: self.info(id)?,
+            window,
             scope,
             generation,
             entities,
@@ -408,6 +474,8 @@ impl Desktop {
 
     fn act_inner(&mut self, a: &ActArgs, r: &mut ActResult) -> Result<()> {
         ensure!(trusted(), "Accessibility permission missing");
+        // discover leaves the cap wherever its budget ran down to.
+        self.cap(AX_REQUEST_TIMEOUT);
         if crate::guard::engaged() {
             r.status = "stopped".into();
             bail!(crate::guard::refusal());
@@ -589,12 +657,14 @@ pub(super) fn run(rx: Receiver<Cmd>, ready: Sender<Result<()>>, cfg: EngineConfi
         next_generation: 0,
         snapshots: HashMap::new(),
         key: cfg.lease_key,
+        system: unsafe { AXUIElement::new_system_wide() },
     };
+    desktop.cap(AX_REQUEST_TIMEOUT);
     let _ = ready.send(Ok(()));
     for command in rx {
         autoreleasepool(|_| match command {
             Cmd::ListWindows(reply) => {
-                let _ = reply.send(desktop.list());
+                let _ = reply.send(desktop.list(Instant::now() + WALK_BUDGET));
             }
             Cmd::Discover(args, reply) => {
                 let _ = reply.send(desktop.discover(args));
