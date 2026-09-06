@@ -385,6 +385,15 @@ window, so a window-relative path cannot name a menu item and the menu bar -
 where most of a Mac application's capability lives - was unreachable. `discover`
 now walks it as a second root.
 
+Two things follow from menus belonging to the application rather than the
+window, and both are enforced. A menu command acts on whichever window the
+application currently has focused, so `act` refuses a menu-rooted action unless
+the scoped window *is* that focused window - otherwise a scope for one document
+would run "Save" against another. And macOS only enables an application's menu
+commands while it is frontmost: 74 of 134 menu entities on a TextEdit window
+report disabled when the application is inactive, 44 once it is not. `activate`
+is the fix for both.
+
 By default it returns just the menu names (`File`, `Edit`, `View`), which costs
 about 15% more response. Ask for `menu_depth: 3` and you get every command
 inside them, which you can `act` on directly - `AXPress` on a menu item performs

@@ -34,11 +34,21 @@ pub struct WindowTarget {
 /// already been returned, not new state.
 static KNOWN: Mutex<BTreeMap<isize, WindowTarget>> = Mutex::new(BTreeMap::new());
 
-/// Replace the registry with what the engine just enumerated.
-pub fn publish(windows: Vec<(isize, WindowTarget)>) {
-    if let Ok(mut known) = KNOWN.lock() {
-        *known = windows.into_iter().collect();
-    }
+/// Record what the engine just enumerated.
+///
+/// `fresh` is what answered this round; `tracked` is every window the engine
+/// still considers valid, which is a superset - an application that was
+/// momentarily unresponsive keeps its windows rather than having their handles
+/// invalidated. Entries for tracked-but-unanswered windows are therefore kept
+/// at their last known identity instead of being dropped, so a transient hang
+/// does not make `observe` and `find_text` reject a handle that `act` still
+/// accepts. Anything no longer tracked is forgotten.
+pub fn publish(fresh: Vec<(isize, WindowTarget)>, tracked: &[isize]) {
+    let Ok(mut known) = KNOWN.lock() else {
+        return;
+    };
+    known.retain(|id, _| tracked.contains(id));
+    known.extend(fresh);
 }
 
 fn known(id: isize) -> Result<WindowTarget> {

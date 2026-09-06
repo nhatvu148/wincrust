@@ -29,12 +29,12 @@ const AX_REQUEST_TIMEOUT: f32 = 0.5;
 const AX_MIN_TIMEOUT: f32 = 0.05;
 
 /// Upper bound on the AX requests one node costs: role, actions, four
-/// settability probes, four name candidates, identifier, position, size,
-/// enabled, and the child fetch. The deadline is only checked *between* nodes,
+/// settability probes, two scroll-bar probes, four name candidates, identifier,
+/// position, size, enabled, and the child fetch. The deadline is only checked *between* nodes,
 /// so the per-request cap has to be the remaining budget divided by this or a
 /// single unresponsive node walks straight through it - measured at 8.2s
 /// against a 5s budget when the cap was sized to the request instead.
-const AX_REQUESTS_PER_NODE: f32 = 16.0;
+const AX_REQUESTS_PER_NODE: f32 = 18.0;
 
 /// Path prefix marking a node reached through the application's menu bar
 /// rather than through the window.
@@ -321,6 +321,8 @@ impl Desktop {
     }
 
     fn list(&mut self, deadline: Instant) -> Result<Vec<WindowInfo>> {
+        /// Title, position and size: what `info` asks of every listed window.
+        const INFO_REQUESTS_PER_WINDOW: f32 = 3.0;
         ensure!(trusted(), "Accessibility permission missing. Grant the host application or installed Wincrust executable access in System Settings > Privacy & Security > Accessibility, then restart it.");
         self.cap(AX_REQUEST_TIMEOUT);
         let apps = NSWorkspace::sharedWorkspace().runningApplications();
@@ -376,10 +378,25 @@ impl Desktop {
         self.windows.retain(|id, w| {
             running.contains(&w.pid) && (live.contains(id) || !asked.contains(&w.pid))
         });
-        let infos: Vec<WindowInfo> = live
-            .into_iter()
-            .filter_map(|id| self.info(id).ok())
-            .collect();
+        // The deadline covers this too: `info` is three synchronous requests per
+        // window, so an application that answers AXWindows and then hangs could
+        // otherwise hold the shared engine for far longer than the budget.
+        let mut infos: Vec<WindowInfo> = Vec::new();
+        for id in live {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                tracing::warn!(
+                    "window enumeration hit the {}s budget while reading window details",
+                    WALK_BUDGET.as_secs()
+                );
+                break;
+            }
+            self.cap(remaining.as_secs_f32() / INFO_REQUESTS_PER_WINDOW);
+            if let Ok(info) = self.info(id) {
+                infos.push(info);
+            }
+        }
+        self.cap(AX_REQUEST_TIMEOUT);
         // Screen capture cannot resolve one of our window IDs on its own; this
         // is the only point where the accessibility identity of every live
         // window is known, so it is where the two are tied together.
@@ -397,6 +414,7 @@ impl Desktop {
                     )
                 })
                 .collect(),
+            &self.windows.keys().copied().collect::<Vec<_>>(),
         );
         Ok(infos)
     }
@@ -453,7 +471,7 @@ impl Desktop {
                 pending.insert(0, (bar, vec![MENU_ROOT]));
             }
         }
-        let mut truncated = None;
+        let mut truncated: Vec<String> = Vec::new();
         let cap = a.max_elements.clamp(1, 2000);
         // Name the limit that actually fired, and say how much is left behind.
         // A caller that is only told "truncated" cannot tell a small window from
@@ -462,7 +480,7 @@ impl Desktop {
         // count, so `examined` is what the caps are really measured against.
         while let Some((el, path)) = pending.pop() {
             if nodes.len() >= cap {
-                truncated = Some(format!(
+                truncated.push(format!(
                     "element cap {cap} reached; examined {}, at least {} not visited",
                     nodes.len(),
                     pending.len() + 1
@@ -471,7 +489,7 @@ impl Desktop {
             }
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
-                truncated = Some(format!(
+                truncated.push(format!(
                     "time budget {}ms reached; examined {}, at least {} not visited",
                     WALK_BUDGET.as_millis(),
                     nodes.len(),
@@ -489,7 +507,15 @@ impl Desktop {
             let depth = path.len() - usize::from(via_menu);
             let limit = if via_menu { a.menu_depth } else { a.max_depth };
             if depth >= limit.min(64) as usize {
-                truncated = Some(format!("depth cap {limit} reached"));
+                // Window and menu subtrees have separate ceilings and can each
+                // be cut; reporting only the last would hide the other.
+                let reason = format!(
+                    "depth cap {limit} reached in the {} tree",
+                    if via_menu { "menu" } else { "window" }
+                );
+                if !truncated.contains(&reason) {
+                    truncated.push(reason);
+                }
                 continue;
             }
             if let Ok(children) = elements(&el, "AXChildren") {
@@ -537,7 +563,7 @@ impl Desktop {
             scope,
             generation,
             entities,
-            truncated,
+            truncated: (!truncated.is_empty()).then(|| truncated.join("; ")),
             elapsed_ms: start.elapsed().as_secs_f64() * 1000.0,
         })
     }
@@ -632,6 +658,21 @@ impl Desktop {
             .get(&scope.hwnd)
             .ok_or_else(|| anyhow!("window closed"))?;
         let via_menu = expected.path.first() == Some(&MENU_ROOT);
+        if via_menu {
+            // A menu belongs to the application, but a menu command acts on
+            // whichever window that application currently has focused. The
+            // scope only authorises one window, so dispatching while a
+            // different document is focused would run "Save" against a file
+            // the caller never named. Refuse; `activate` is the way back.
+            let app = unsafe { AXUIElement::new_application(window.pid) };
+            let focused = attr(&app, "AXFocusedWindow")
+                .ok()
+                .and_then(|f| f.downcast::<AXUIElement>().ok());
+            if focused.as_deref() != Some(&*window.el) {
+                r.status = "identity_changed".into();
+                bail!("the scoped window is not this application's focused window, and a menu command would act on whichever window is; activate it first");
+            }
+        }
         let mut live = if via_menu {
             menu_bar(window.pid)?
         } else {
@@ -655,6 +696,15 @@ impl Desktop {
         }
         if !current.enabled {
             r.status = "disabled".into();
+            // Measured on TextEdit: 74 of 134 menu entities report disabled
+            // while the application is inactive, and 44 once it is frontmost -
+            // `Make Rich Text` among the ones that flip. macOS validates menu
+            // commands against the active application, so the report is true
+            // but conditional, and a caller that does not know that reads a
+            // perfectly available command as permanently unavailable.
+            if via_menu {
+                bail!("menu item reports AXEnabled=false; macOS only enables an application's menu commands while it is frontmost, so activate the window first and discover again");
+            }
             bail!("control reports AXEnabled=false");
         }
         if !current.actions.contains(&a.action) {

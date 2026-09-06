@@ -257,6 +257,27 @@ impl Wincrust {
         Self { engine, allowlist }
     }
 
+    /// Make a window handle's capture identity as young as the handle itself.
+    ///
+    /// macOS cannot convert one of our window IDs into a ScreenCaptureKit
+    /// window ID - no public API bridges an `AXUIElement` to a `CGWindowID` -
+    /// so capture matches on owning process, title and frame instead. Those are
+    /// only safe to match on while they are current: a window that closed and
+    /// was replaced by one with the same title at the same place would
+    /// otherwise be captured through the old handle. Re-enumerating here prunes
+    /// the closed window, so the stale handle is refused by name rather than
+    /// silently resolving to its replacement.
+    ///
+    /// Windows needs none of this: an HWND is the operating system's own handle.
+    #[cfg(target_os = "macos")]
+    async fn refresh_capture_identity(&self, hwnd: Option<isize>) {
+        if hwnd.is_some() {
+            let _ = self.engine.list_windows().await;
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    async fn refresh_capture_identity(&self, _hwnd: Option<isize>) {}
+
     #[tool(
         name = "windows",
         description = "List top-level windows with their handles, pids and bounds, including \
@@ -408,6 +429,7 @@ impl Wincrust {
         let is_diff = detail == "diff";
         let max_width = p.max_width.unwrap_or(1400);
         let hwnd = p.hwnd;
+        self.refresh_capture_identity(hwnd).await;
         let (obs, png) =
             tokio::task::spawn_blocking(move || capture::observe_bytes(is_diff, max_width, hwnd))
                 .await
@@ -630,6 +652,7 @@ impl Wincrust {
         let max = p.max_matches.unwrap_or(50);
         let hwnd = p.hwnd;
         let lang = p.lang;
+        self.refresh_capture_identity(hwnd).await;
         tokio::task::spawn_blocking(move || {
             ocr::find_text(ocr::FindArgs {
                 query: q.as_deref(),
