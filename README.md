@@ -413,6 +413,8 @@ window:
 | `act` on a menu | TextEdit Format ▸ Make Rich Text ran; the item flipped to Make Plain Text and the document became `.rtf` |
 | `act` `scroll` | reached the foot of a 100-section page; `find_text` then read the footer off the screen |
 | `act` `activate` | frontmost moved Finder → TextEdit, after which a `cmd+a` that had been discarded cleared the document |
+| window `observe` | 673×439, ~393 tokens, against ~3,643 for the desktop |
+| window `find_text` | found text in a window that a desktop capture could not see, and found nothing from other windows |
 
 Two refusals were exercised deliberately, because a guard nobody has seen fire
 is a comment:
@@ -436,10 +438,28 @@ application merely stopped answering keeps its handle and its outstanding
 scopes — it is forgotten only when its application answers without listing it,
 or exits.
 
+**Reading one window.** `observe` and `find_text` take an `hwnd`, and on macOS
+that is a real per-window capture rather than a crop of the desktop:
+ScreenCaptureKit renders the window itself. Three consequences, all measured on
+one screen with a TextEdit window behind a full-width Safari window:
+
+- **It reads nothing else.** OCR scoped to Safari did not return a canary string
+  sitting in the TextEdit window. A desktop survey on a shared screen reads
+  every application the user has open and hands that text to the caller; this
+  does not.
+- **It sees covered windows.** The same canary was unreadable in a desktop
+  capture, because Safari was on top of it, and read correctly when scoped to
+  the TextEdit window.
+- **It is about nine times cheaper.** 673×439 at ~393 tokens against the whole
+  desktop's 2056×1329 at ~3,643.
+
+A window that has moved since the last `windows` call is refused - "0 shareable
+windows match ... call windows again" - rather than captured from wherever it
+used to be.
+
 Not verified: `scale 1.0`, more than one display, and any monitor sitting left
-of or above the primary. `launch`, `window_capture` and `ocr_click` are reported
-unsupported by `doctor` and are genuinely absent — `find_text` on macOS is a
-desktop-wide survey, not a per-window crop.
+of or above the primary. `launch` and `ocr_click` are reported unsupported by
+`doctor` and are genuinely absent.
 
 ## Limits
 

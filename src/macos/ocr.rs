@@ -6,13 +6,13 @@ use objc2_vision::{VNImageRequestHandler, VNRecognizeTextRequest, VNRequest};
 
 pub fn find_text(args: FindArgs<'_>) -> Result<TextResult> {
     let start = std::time::Instant::now();
-    ensure!(
-        args.hwnd.is_none(),
-        "Window-scoped OCR is not yet supported on macOS; omit hwnd for a desktop text survey"
-    );
-    let frame = match args.image {
-        Some(p) => crate::capture::frame_from_png(p)?,
-        None => super::capture::grab()?,
+    let frame = match (args.image, args.hwnd) {
+        (Some(p), _) => crate::capture::frame_from_png(p)?,
+        // Reading one window rather than the desktop is not only cheaper: on a
+        // shared screen a desktop survey OCRs every other application the user
+        // has open, and returns their text to the caller.
+        (None, Some(hwnd)) => super::capture::capture_window(hwnd)?,
+        (None, None) => super::capture::grab()?,
     };
     ensure!(
         args.scale.is_finite() && (0.0..=4.0).contains(&args.scale),

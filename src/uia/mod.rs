@@ -37,7 +37,7 @@ pub struct WindowInfo {
     pub owned_by: Option<isize>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct Bounds {
     pub x: i32,
     pub y: i32,

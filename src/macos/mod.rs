@@ -11,7 +11,8 @@ pub fn diagnostics() -> serde_json::Value {
         "screenshot_api_available":objc2::available!(macos = 14.0),
         "coordinate_space":"desktop points, top-left origin",
         "capabilities":{"accessibility":true,"keyboard":true,"desktop_capture":true,"ocr":true,
-            "launch":false,"window_capture":false,"ocr_click":false},
+            "scroll":true,"activate":true,"menus":true,"window_capture":true,
+            "launch":false,"ocr_click":false},
         "note":"Initial macOS backend: US/ABC alphanumeric shortcuts; named navigation keys and Unicode typing. Grant permissions to the launching host or installed executable, then restart. No permissions are requested automatically."
     })
 }

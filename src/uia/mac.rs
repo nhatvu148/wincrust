@@ -376,10 +376,29 @@ impl Desktop {
         self.windows.retain(|id, w| {
             running.contains(&w.pid) && (live.contains(id) || !asked.contains(&w.pid))
         });
-        Ok(live
+        let infos: Vec<WindowInfo> = live
             .into_iter()
             .filter_map(|id| self.info(id).ok())
-            .collect())
+            .collect();
+        // Screen capture cannot resolve one of our window IDs on its own; this
+        // is the only point where the accessibility identity of every live
+        // window is known, so it is where the two are tied together.
+        crate::macos::capture::publish(
+            infos
+                .iter()
+                .map(|w| {
+                    (
+                        w.hwnd,
+                        crate::macos::capture::WindowTarget {
+                            pid: w.pid,
+                            title: w.name.clone(),
+                            bounds: w.bounds,
+                        },
+                    )
+                })
+                .collect(),
+        );
+        Ok(infos)
     }
 
     fn info(&self, id: isize) -> Result<WindowInfo> {

@@ -223,8 +223,14 @@ pub fn capture_window(hwnd: isize) -> Result<Frame> {
 }
 
 #[cfg(not(windows))]
-pub fn capture_window(_hwnd: isize) -> Result<Frame> {
-    anyhow::bail!("window capture requires Windows")
+pub fn capture_window(hwnd: isize) -> Result<Frame> {
+    #[cfg(target_os = "macos")]
+    return crate::macos::capture::capture_window(hwnd);
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = hwnd;
+        anyhow::bail!("window capture requires Windows or macOS")
+    }
 }
 
 #[cfg(windows)]
