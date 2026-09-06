@@ -11,7 +11,9 @@
 //! property that is half the point of this crate.
 
 use crate::text::MatchTier;
-use anyhow::{anyhow, Result};
+#[cfg(windows)]
+use anyhow::anyhow;
+use anyhow::Result;
 use schemars::JsonSchema;
 use serde::Serialize;
 
@@ -82,7 +84,7 @@ fn fold_confusables(s: &str) -> String {
 /// about pixels rather than about language. Running it on already-normalised
 /// text is what lets the two compose: a full-width Japanese digit reaches the
 /// confusable table as an ASCII one.
-fn matches_text(haystack: &str, needle: &str) -> Option<MatchTier> {
+pub(crate) fn matches_text(haystack: &str, needle: &str) -> Option<MatchTier> {
     if let Some(t) = crate::text::contains_tier(haystack, needle) {
         return Some(t);
     }
@@ -330,7 +332,12 @@ pub fn find_text(args: FindArgs<'_>) -> Result<TextResult> {
     })
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+pub fn find_text(args: FindArgs<'_>) -> Result<TextResult> {
+    crate::macos::ocr::find_text(args)
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn find_text(_a: FindArgs<'_>) -> Result<TextResult> {
     anyhow::bail!("OCR requires Windows")
 }

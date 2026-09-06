@@ -307,6 +307,9 @@ impl Wincrust {
             return Err(McpError::internal_error(guard::refusal(), None));
         }
         let select = p.select.filter(|s| !s.is_empty());
+        if cfg!(target_os = "macos") && p.allow_ocr {
+            return Err(McpError::invalid_params("Automatic OCR clicks are not yet supported on macOS. Use find_text to survey text and act on discovered accessibility elements.", None));
+        }
         let ocr_query = p
             .allow_ocr
             .then(|| select.as_ref().and_then(|s| s.name.clone()))
@@ -642,6 +645,9 @@ impl Wincrust {
         if guard::engaged() {
             return Err(McpError::internal_error(guard::refusal(), None));
         }
+        if cfg!(target_os = "macos") {
+            return Err(McpError::invalid_params("Application launch is not yet supported by the macOS backend; open the application first.", None));
+        }
         let want = p.name.trim().to_lowercase();
         if !self.allowlist.contains(&want) {
             return Err(McpError::invalid_params(
@@ -730,6 +736,13 @@ impl ServerHandler for Wincrust {
              - There is no shell here. For files, processes and commands, use SSH instead."
                 .into(),
         );
+        #[cfg(target_os = "macos")]
+        {
+            info.instructions = Some(format!(
+            "macOS desktop automation. Call windows, then discover before act. hwnd is an opaque process-local window ID, not a Win32 handle. Scopes expire within {} seconds and may be evicted; discover again after every action. Use only returned actions. A successful action means dispatched, not verified: inspect the resulting UI. Errors can occur after focus changes; do not retry blindly. Keys use Command/Control/Option explicitly. Screenshot and OCR coordinates are desktop points with a top-left origin. macOS 14+ is required for screenshots. Window capture, automatic OCR clicks and launch are not supported in this initial backend. Permissions: {}",
+            crate::lease::DEFAULT_TTL_SECS, crate::macos::diagnostics()
+        ));
+        }
         info
     }
 }

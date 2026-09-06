@@ -13,6 +13,8 @@ use serde::{Deserialize, Serialize};
 use std::sync::mpsc::{self, Sender};
 use tokio::sync::oneshot;
 
+#[cfg(target_os = "macos")]
+pub(crate) mod mac;
 #[cfg(windows)]
 mod win;
 
@@ -283,11 +285,6 @@ pub fn window_bounds(hwnd: isize) -> Result<Bounds> {
     })
 }
 
-#[cfg(not(windows))]
-pub fn window_bounds(_hwnd: isize) -> Result<Bounds> {
-    Err(anyhow!("requires Windows"))
-}
-
 /// Commands the COM thread understands. Each carries its own reply channel.
 enum Cmd {
     ListWindows(oneshot::Sender<Result<Vec<WindowInfo>>>),
@@ -320,7 +317,9 @@ impl Engine {
             .spawn(move || {
                 #[cfg(windows)]
                 win::run(rx, ready_tx, cfg);
-                #[cfg(not(windows))]
+                #[cfg(target_os = "macos")]
+                mac::run(rx, ready_tx, cfg);
+                #[cfg(not(any(windows, target_os = "macos")))]
                 {
                     let _ = (rx, cfg);
                     let _ = ready_tx.send(Err(anyhow!("wincrust requires Windows")));

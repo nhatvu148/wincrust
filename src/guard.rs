@@ -105,7 +105,34 @@ pub fn spawn_watcher() {
         .expect("spawn estop watcher");
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+pub fn spawn_watcher() {
+    std::thread::Builder::new()
+        .name("wincrust-estop".into())
+        .spawn(|| {
+            let start = std::time::Instant::now();
+            let mut state = EstopState::default();
+            loop {
+                std::thread::sleep(Duration::from_millis(100));
+                let event = objc2_core_graphics::CGEvent::new(None);
+                // Failure to read the cursor disables input rather than removing
+                // the user's emergency stop without notice.
+                let Some(event) = event else {
+                    ENGAGED.store(true, Ordering::Relaxed);
+                    continue;
+                };
+                let p = objc2_core_graphics::CGEvent::location(Some(&event));
+                let corner = p.x.abs() <= f64::from(CORNER_PX) && p.y.abs() <= f64::from(CORNER_PX);
+                ENGAGED.store(
+                    state.step(start.elapsed().as_millis() as u64, 100, corner),
+                    Ordering::Relaxed,
+                );
+            }
+        })
+        .expect("spawn estop watcher");
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn spawn_watcher() {}
 
 /// Apps `launch` is permitted to start.
@@ -120,6 +147,9 @@ pub fn spawn_watcher() {}
 /// and the unlabelled replacement is trusted anyway. Holding one handle across
 /// both operations closes it.
 pub fn load_allowlist() -> Vec<String> {
+    if cfg!(target_os = "macos") {
+        return Vec::new();
+    }
     let path = allowlist_path();
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);

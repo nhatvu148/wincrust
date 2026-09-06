@@ -84,11 +84,6 @@ pub fn session_is_locked() -> bool {
     }
 }
 
-#[cfg(not(windows))]
-pub fn session_is_locked() -> bool {
-    false
-}
-
 /// Capture one window through `PrintWindow(PW_RENDERFULLCONTENT)`.
 ///
 /// `BitBlt` from the screen DC reads the desktop surface, and hardware
@@ -326,7 +321,12 @@ pub fn grab() -> Result<Frame> {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+pub fn grab() -> Result<Frame> {
+    crate::macos::capture::grab()
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn grab() -> Result<Frame> {
     Err(anyhow!("capture requires Windows"))
 }
@@ -736,6 +736,7 @@ pub struct ChangedRegion {
 }
 
 /// Crop exposed for the OCR region-of-interest path.
+#[cfg(windows)]
 pub fn crop_frame(f: &Frame, x: u32, y: u32, w: u32, h: u32) -> Frame {
     crop(f, x, y, w, h)
 }

@@ -15,8 +15,11 @@ use anyhow::{anyhow, Result};
 pub const VK_BACK: u16 = 0x08;
 pub const VK_TAB: u16 = 0x09;
 pub const VK_RETURN: u16 = 0x0D;
+#[cfg(any(windows, test))]
 pub const VK_SHIFT: u16 = 0x10;
+#[cfg(any(windows, test))]
 pub const VK_CONTROL: u16 = 0x11;
+#[cfg(any(windows, test))]
 pub const VK_MENU: u16 = 0x12; // Alt
 pub const VK_ESCAPE: u16 = 0x1B;
 pub const VK_SPACE: u16 = 0x20;
@@ -29,6 +32,7 @@ pub const VK_UP: u16 = 0x26;
 pub const VK_RIGHT: u16 = 0x27;
 pub const VK_DOWN: u16 = 0x28;
 pub const VK_DELETE: u16 = 0x2E;
+#[cfg(any(windows, test))]
 pub const VK_LWIN: u16 = 0x5B;
 pub const VK_OEM_PLUS: u16 = 0xBB;
 pub const VK_OEM_MINUS: u16 = 0xBD;
@@ -48,6 +52,7 @@ impl Chord {
     /// The modifiers to press before the key and release after, outermost
     /// first. Order matters on release: releasing a modifier before the key it
     /// modifies can deliver a different keystroke to the application.
+    #[cfg(any(windows, test))]
     pub fn modifiers(&self) -> Vec<u16> {
         let mut m = Vec::new();
         if self.ctrl {
@@ -136,8 +141,8 @@ pub fn parse_chord(spec: &str) -> Result<Chord> {
         match m.trim().to_ascii_lowercase().as_str() {
             "ctrl" | "control" => c.ctrl = true,
             "shift" => c.shift = true,
-            "alt" => c.alt = true,
-            "win" | "meta" | "cmd" => c.win = true,
+            "alt" | "option" | "opt" => c.alt = true,
+            "win" | "meta" | "cmd" | "command" | "super" => c.win = true,
             "" => return Err(anyhow!("empty modifier in {spec:?}")),
             other => return Err(anyhow!("unknown modifier {other:?} in {spec:?}")),
         }

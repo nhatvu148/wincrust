@@ -4,6 +4,8 @@ mod guard;
 mod input;
 mod keys;
 mod lease;
+#[cfg(target_os = "macos")]
+mod macos;
 mod ocr;
 mod server;
 mod text;
@@ -16,7 +18,7 @@ use std::time::Instant;
 #[derive(Parser)]
 #[command(
     name = "wincrust",
-    about = "Elevated Windows desktop automation over MCP",
+    about = "Windows and macOS desktop automation over MCP",
     // Taken from Cargo.toml. `wincrust --version` is the first thing anyone
     // types after `cargo install`, and 0.1.0 answered it with a parse error.
     version
@@ -28,6 +30,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Report platform capabilities and permissions without touching the desktop.
+    Doctor,
     /// List top-level windows as JSON.
     Windows,
     /// Time repeated window enumerations.
@@ -172,6 +176,16 @@ async fn main() -> Result<()> {
     dpi::declare_awareness();
 
     let cli = Cli::parse();
+    if matches!(cli.cmd, Command::Doctor) {
+        #[cfg(target_os = "macos")]
+        println!("{}", serde_json::to_string_pretty(&macos::diagnostics())?);
+        #[cfg(not(target_os = "macos"))]
+        println!(
+            "{}",
+            serde_json::json!({"platform":std::env::consts::OS,"backend_available":cfg!(windows)})
+        );
+        return Ok(());
+    }
     let t0 = Instant::now();
     let lease_key = lease::new_key()?;
     let engine = uia::Engine::spawn(uia::EngineConfig { lease_key })?;
@@ -182,6 +196,7 @@ async fn main() -> Result<()> {
     );
 
     match cli.cmd {
+        Command::Doctor => unreachable!("handled before engine startup"),
         Command::Windows => {
             let w = engine.list_windows().await?;
             println!("{}", serde_json::to_string_pretty(&w)?);
