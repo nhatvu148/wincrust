@@ -89,6 +89,33 @@ shot** against roughly **100** for a `wait_for` result. On a dialog that takes
 a while, that is the difference between a wait costing twenty thousand tokens
 and costing nothing.
 
+### What `observe` costs, and why `text` is the default
+
+`observe` has three detail levels and they are not three renderings of one
+answer:
+
+| detail | what it returns | cost |
+|---|---|---|
+| `text` *(default)* | window list + the focused window's actionable UIA tree | flat - does not scale with what is on screen |
+| `diff` | only what changed since the last observe | nothing at all when nothing changed |
+| `image` | a full PNG | ~2,700 tokens every call |
+
+`text` is the default because most steps in a GUI task are decided by the
+tree, not by pixels: which controls exist, what they are called, whether the
+one you want is enabled yet. Escalate to `image` when the question is
+genuinely visual - a viewport, a rendered document, a control with no tree
+entry, or a window whose tree came back empty.
+
+Passing `hwnd` is the other lever, and it stacks: one window was measured at
+**~393 tokens** against **~3,643** for the whole desktop. A run that
+screenshots the entire desktop at every step will exhaust its context long
+before the task is finished.
+
+The CLI keeps `image` as its default, which is not an inconsistency. `wincrust
+observe` writes the PNG to a file and prints metadata - a human at a terminal
+pays no token cost for it. The cost only exists on the MCP path, where the
+image is encoded into a model's context.
+
 ### Typing, and pressing keys
 
 These are different actions and the distinction matters.
