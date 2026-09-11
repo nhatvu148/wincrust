@@ -146,7 +146,16 @@ pub struct ObserveParams {
     /// `hwnd` is the larger saving: one window was measured at ~393 tokens
     /// against ~3,643 for the whole desktop.
     pub max_width: Option<u32>,
-    /// Render this window on demand instead of reading the desktop.
+    /// Scope the read to one window instead of the whole desktop.
+    ///
+    /// Under `text` this walks that window's tree rather than whichever window
+    /// the OS currently considers focused - which is what you want whenever
+    /// you already know the target, and is the difference between reading the
+    /// window you asked about and reading whatever the user last clicked. The
+    /// returned `tree.window` always names what was actually walked.
+    ///
+    /// Under `image` and `diff` it renders that window on demand instead of
+    /// reading the desktop surface.
     ///
     /// Worth trying whenever the target draws with OpenGL or Direct3D - a CAD
     /// or simulation viewport, a game, a video pane. A screen read returns
@@ -409,8 +418,10 @@ impl Wincrust {
                        document, a control the tree does not expose, or a window whose tree came \
                        back empty. Most steps in a GUI task are decided by the tree, and a run \
                        that screenshots every step will exhaust its context long before the task \
-                       is done. Passing `hwnd` cuts a visual read further - one window measured \
-                       ~393 tokens against ~3,643 for the desktop. WITHOUT `hwnd` this \
+                       is done. Pass `hwnd` whenever you already know the target: under `text` \
+                       it walks that window instead of whichever one the OS calls focused, and \
+                       under `image` it cuts the read further - one window measured ~393 tokens \
+                       against ~3,643 for the desktop. WITHOUT `hwnd` an image read does this \
                        reads the desktop, which does NOT contain hardware-accelerated content: an \
                        OpenGL or Direct3D viewport comes back as flat colour that looks exactly \
                        like an empty one. `hwnd` renders that window on demand instead, which \
@@ -433,10 +444,10 @@ impl Wincrust {
                 .list_windows()
                 .await
                 .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-            let focused = self
+            let tree = self
                 .engine
                 .discover(uia::DiscoverArgs {
-                    hwnd: None,
+                    hwnd: p.hwnd,
                     max_depth: 24,
                     max_elements: 400,
                     ttl_secs: crate::lease::DEFAULT_TTL_SECS,
@@ -450,7 +461,7 @@ impl Wincrust {
                 "process_dpi_awareness": crate::dpi::awareness(),
                 "displays": crate::dpi::displays().unwrap_or_default(),
                 "windows": wins,
-                "focused": focused,
+                "tree": tree,
             });
             return Ok(CallToolResult::success(vec![ContentBlock::text(
                 v.to_string(),

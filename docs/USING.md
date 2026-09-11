@@ -96,7 +96,7 @@ answer:
 
 | detail | what it returns | cost |
 |---|---|---|
-| `text` *(default)* | window list + the focused window's actionable UIA tree | flat - does not scale with what is on screen |
+| `text` *(default)* | window list + one window's actionable UIA tree | flat - does not scale with what is on screen |
 | `diff` | only what changed since the last observe | nothing at all when nothing changed |
 | `image` | a full PNG | ~2,700 tokens every call |
 
@@ -106,8 +106,13 @@ one you want is enabled yet. Escalate to `image` when the question is
 genuinely visual - a viewport, a rendered document, a control with no tree
 entry, or a window whose tree came back empty.
 
-Passing `hwnd` is the other lever, and it stacks: one window was measured at
-**~393 tokens** against **~3,643** for the whole desktop. A run that
+Passing `hwnd` is the other lever, and it applies to every detail level.
+Under `text` it walks that window's tree instead of whichever window the OS
+currently calls focused - so pass it whenever you already know the target,
+because "the focused window" is whatever the user last clicked and is not a
+claim you want to build on. The returned `tree.window` always names what was
+actually walked. Under `image` it also cuts the read: one window was measured
+at **~393 tokens** against **~3,643** for the whole desktop. A run that
 screenshots the entire desktop at every step will exhaust its context long
 before the task is finished.
 

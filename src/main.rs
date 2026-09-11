@@ -304,7 +304,7 @@ async fn main() -> Result<()> {
                     let wins = engine.list_windows().await?;
                     let d = engine
                         .discover(uia::DiscoverArgs {
-                            hwnd: None,
+                            hwnd,
                             max_depth: 24,
                             max_elements: 400,
                             ttl_secs: 60,
@@ -319,7 +319,7 @@ async fn main() -> Result<()> {
                         serde_json::to_string_pretty(&serde_json::json!({
                             "windows": wins.iter().map(|w| serde_json::json!({
                                 "name": w.name, "hwnd": w.hwnd, "pid": w.pid })).collect::<Vec<_>>(),
-                            "focused": d,
+                            "tree": d,
                         }))?
                     );
                 }
