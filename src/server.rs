@@ -124,12 +124,38 @@ pub struct ActParams {
 
 #[derive(Debug, Deserialize, JsonSchema, Default)]
 pub struct ObserveParams {
-    /// "text" (window list + focused elements), "image" (full screen),
-    /// or "diff" (only what changed since the last observe).
+    /// "text" (window list + focused elements, the default), "image" (full
+    /// screen), or "diff" (only what changed since the last observe).
+    ///
+    /// These are not three renderings of one answer and they do not cost the
+    /// same. "text" is a UIA tree - a few hundred elements of JSON - and it is
+    /// the only one whose cost does not scale with what happens to be on
+    /// screen. "image" encodes a PNG on every call, measured at roughly 2,700
+    /// tokens against roughly 100 for a `wait_for` result.
+    ///
+    /// Ask for "text" first. Escalate to "image" when the question is genuinely
+    /// visual: a viewport, a rendered document, a control the tree does not
+    /// expose, or a window whose tree came back empty. A run that screenshots
+    /// every step exhausts its context long before a GUI task is finished.
     pub detail: Option<String>,
     /// Downscale width before encoding. Default 1400; 0 for native.
+    ///
+    /// Read only for "image" and "diff". Lowering it is the cheapest way to
+    /// make a visual read affordable, but OCR accuracy falls off with it, and
+    /// `find_text` is the better instrument when the target is text. Passing
+    /// `hwnd` is the larger saving: one window was measured at ~393 tokens
+    /// against ~3,643 for the whole desktop.
     pub max_width: Option<u32>,
-    /// Render this window on demand instead of reading the desktop.
+    /// Scope the read to one window instead of the whole desktop.
+    ///
+    /// Under `text` this walks that window's tree rather than whichever window
+    /// the OS currently considers focused - which is what you want whenever
+    /// you already know the target, and is the difference between reading the
+    /// window you asked about and reading whatever the user last clicked. The
+    /// returned `tree.window` always names what was actually walked.
+    ///
+    /// Under `image` and `diff` it renders that window on demand instead of
+    /// reading the desktop surface.
     ///
     /// Worth trying whenever the target draws with OpenGL or Direct3D - a CAD
     /// or simulation viewport, a game, a video pane. A screen read returns
@@ -382,8 +408,20 @@ impl Wincrust {
 
     #[tool(
         name = "observe",
-        description = "See the screen. `diff` is much cheaper than `image` during a wait - it \
-                       returns nothing at all when the screen has not changed. WITHOUT `hwnd` this \
+        description = "See the screen. THREE detail levels, cheapest first. `text` (the \
+                       DEFAULT) returns the window list plus the focused window's actionable UIA \
+                       elements, and costs the same whatever is on screen. `diff` returns nothing \
+                       at all when nothing has changed, which is what a wait should use. `image` \
+                       encodes a full PNG every call - roughly 2,700 tokens a shot, against \
+                       roughly 100 for a `wait_for` result. Reach for `text` first and escalate \
+                       only when the question is actually visual: a viewport, a rendered \
+                       document, a control the tree does not expose, or a window whose tree came \
+                       back empty. Most steps in a GUI task are decided by the tree, and a run \
+                       that screenshots every step will exhaust its context long before the task \
+                       is done. Pass `hwnd` whenever you already know the target: under `text` \
+                       it walks that window instead of whichever one the OS calls focused, and \
+                       under `image` it cuts the read further - one window measured ~393 tokens \
+                       against ~3,643 for the desktop. WITHOUT `hwnd` an image read does this \
                        reads the desktop, which does NOT contain hardware-accelerated content: an \
                        OpenGL or Direct3D viewport comes back as flat colour that looks exactly \
                        like an empty one. `hwnd` renders that window on demand instead, which \
@@ -399,17 +437,17 @@ impl Wincrust {
         &self,
         Parameters(p): Parameters<ObserveParams>,
     ) -> Result<CallToolResult, McpError> {
-        let detail = p.detail.unwrap_or_else(|| "image".into());
+        let detail = p.detail.unwrap_or_else(|| "text".into());
         if detail == "text" {
             let wins = self
                 .engine
                 .list_windows()
                 .await
                 .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-            let focused = self
+            let tree = self
                 .engine
                 .discover(uia::DiscoverArgs {
-                    hwnd: None,
+                    hwnd: p.hwnd,
                     max_depth: 24,
                     max_elements: 400,
                     ttl_secs: crate::lease::DEFAULT_TTL_SECS,
@@ -423,7 +461,7 @@ impl Wincrust {
                 "process_dpi_awareness": crate::dpi::awareness(),
                 "displays": crate::dpi::displays().unwrap_or_default(),
                 "windows": wins,
-                "focused": focused,
+                "tree": tree,
             });
             return Ok(CallToolResult::success(vec![ContentBlock::text(
                 v.to_string(),
