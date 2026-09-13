@@ -131,10 +131,21 @@ sketch can hold, so call `discover`.
 you can `act` on where an image gives pixels you must guess at. But the reason
 is usefulness per token, not a flat cost it never had.
 
-**When you are about to act and need the whole tree, call `discover`.** That is
-the escalation - not a bigger `observe`. Escalate to `image` when the question
-is genuinely visual: a viewport, a rendered document, a control with no tree
-entry, or a window whose tree came back empty.
+**When you are about to act and need more of the tree, call `discover`** - not
+a bigger `observe`. But do not read `truncated` as a promise that `discover`
+finishes the job: it caps at 400 itself, and a genuinely dense window goes past
+that. File Explorer holds **568** actionable elements, so `discover` truncates
+too, and `max_elements: 2000` returns the complete tree at **20,077 tokens** -
+fourteen screenshots for one observation.
+
+On a window that dense, walking the tree is usually the wrong move. `act`
+resolves a selector, `wait_for` takes one, and `find_text` targets by string;
+none of them need the tree enumerated first. Enumerate when you genuinely do
+not know what is there, and treat it as a decision rather than a reflex.
+
+Escalate to `image` when the question is genuinely visual: a viewport, a
+rendered document, a control with no tree entry, or a window whose tree came
+back empty.
 
 Pass `hwnd` whenever you know the target. Under `text` it sketches that window
 instead of whichever one the OS calls focused - "the focused window" is

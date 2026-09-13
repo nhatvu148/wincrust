@@ -73,18 +73,31 @@ pub struct DiscoverParams {
 /// 40 rather than 20, which was tried first and measured end to end at a very
 /// tight 1,157-1,271 tokens for every window. The reason not to keep it is the
 /// `truncated` flag: at 20 it was set on all four windows, including Chrome
-/// (~45 actionable controls) and Notepad (~25), and a flag that is always set
+/// (31 actionable controls) and Notepad (22), and a flag that is always set
 /// carries nothing. It should mean "this window is denser than a sketch can
-/// hold, go call `discover`", and at 40 it does - Chrome and Notepad come back
-/// whole, File Explorer and Task Manager say they were cut.
+/// hold", and at 40 it does - Chrome and Notepad come back whole, File
+/// Explorer (568) and Task Manager (139) say they were cut.
 ///
 /// The cost of that is the dense case: ~1,950 rather than ~1,250, so about
 /// 40% over a screenshot rather than just under one. Worth it. The target was
 /// never to beat an image on price - it was to stop `observe` costing ten of
 /// them, and 7.4x of the 11.9x survives.
 ///
-/// A capped walk sets `truncated`, so a caller is told it saw a sketch and can
-/// call `discover` for the rest. That is the escalation, and it is one call.
+/// A capped walk sets `truncated`, so a caller is told it saw a sketch rather
+/// than being handed a partial view that looks complete.
+///
+/// What it should NOT be read as is "call `discover` and you will get the
+/// rest". `discover` caps at 400 itself, and on a window dense enough to
+/// matter that is not the end of it: File Explorer holds 568 actionable
+/// elements, so `discover` truncates too and the complete tree costs 20,077
+/// tokens - fourteen screenshots for one observation. Raising `max_elements`
+/// buys the whole tree at exactly that price.
+///
+/// So on a dense window the answer is usually not to walk it at all. `act`
+/// resolves a selector, `wait_for` takes one, and `find_text` targets by
+/// string; none of them need the tree enumerated first. Dumping it is for when
+/// you genuinely do not know what is there, and it should be a decision rather
+/// than a reflex.
 pub const OBSERVE_TREE_ELEMENTS: usize = 40;
 
 /// Names the menus without pricing every discover like a menu dump.
@@ -464,8 +477,13 @@ impl Wincrust {
         name = "observe",
         description = "See the screen. `text` (the DEFAULT) is the window list plus a CAPPED \
                        sketch of one window's actionable tree - about 40 controls, ~1,200-2,000 \
-                       tokens, and it sets `truncated` when the window held more. Treat that \
-                       flag as the signal to call `discover`. Prefer it: it names controls and \
+                       tokens, and it sets `truncated` when the window held more. `truncated` \
+                       is not a promise that `discover` finishes the job - it caps at 400 \
+                       itself, and a dense window blows through that too - one measured 568 \
+                       elements and 20,077 tokens for the complete tree. On a window that big, \
+                       act by selector instead (`act`, `wait_for`) or target text with \
+                       `find_text`; none of those need the tree enumerated. Prefer `text`: it \
+                       names controls and \
                        returns a scope you can act on, where an image hands you pixels you then \
                        have to guess at. When you are about to act and need the FULL tree, call \
                        `discover` - that is the escalation, not a bigger `observe`. `image` \

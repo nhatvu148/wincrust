@@ -104,8 +104,11 @@ sets `truncated` when the window held more. It is the default because it names
 controls and hands back a scope you can `act` on, where an image gives pixels
 you must guess at - not because it is free.
 
-**`truncated` is the signal to call `discover`.** It is not set on every
-window, so when you see it the window really is denser than a sketch can hold.
+**`truncated` means the window is denser than a sketch can hold.** It is not
+set on every window, so it carries information when you see it. It does *not*
+mean "call `discover` and you will get the rest" - `discover` caps at 400 too,
+and File Explorer's 568 elements cost **20,077 tokens** to enumerate in full.
+On a window that dense, act by selector or `find_text` instead of walking it.
 
 - **Orienting** - "what is in front of me" - `observe`. ~1,200-2,000 tokens.
 - **About to act, need every control** - `discover`. That is the escalation,
