@@ -55,8 +55,8 @@ the answer requires *looking at* or *touching* the desktop.
    dialog, a loaded file, a finished job. `until` is `appears` (default),
    `disappears` or `enabled`. It returns a scope, so you can act on what you
    waited for without racing it. Do not poll `discover` in a loop instead, and
-   never poll with `observe detail=image`: that is ~2,700 tokens a shot against
-   ~100 for a `wait_for` result.
+   never poll `observe` in any mode: that is ~1,400 tokens a shot as an image
+   and ~1,200-2,000 as a tree, against ~100 for a `wait_for` result.
 5. **`find_text`** - OCR, for apps with no tree. Restrict it with `hwnd`:
    fewer pixels means more magnification and better accuracy, and it stops a
    query matching text elsewhere on the desktop.

@@ -84,10 +84,10 @@ A timeout is reported as `timeout`, not an error: the target may be absent, or
 merely slower than you allowed.
 
 The round trips are not the main saving. The alternative to `wait_for` is
-polling with `observe detail=image`, which costs roughly **2,700 tokens a
-shot** against roughly **100** for a `wait_for` result. On a dialog that takes
-a while, that is the difference between a wait costing twenty thousand tokens
-and costing nothing.
+polling `observe`, which costs roughly **1,400 tokens a shot** as an image and
+**1,200-2,000** as a tree, against roughly **100** for a `wait_for` result. On
+a dialog that takes a while, that is the difference between a wait costing tens
+of thousands of tokens and costing nothing.
 
 ### What `observe` costs, and why `text` is the default
 

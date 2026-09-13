@@ -58,7 +58,7 @@ required. The reason is what elevation does to the cost of a large dependency tr
 | `discover` | actionable elements + a signed scope |
 | `act` | click / type / toggle / expand / select, via UIA control patterns |
 | `act` + `key` | send keystrokes to a resolved control — `Enter`, `Ctrl+S`, `F5` |
-| `observe` | `text` (default, flat cost) \| `image` (~2,700 tokens a shot) \| `diff` |
+| `observe` | `text` (default) — capped ~40-control sketch, ~1,200-2,000 tok \| `image` — ~1,400 tok, near-fixed \| `diff` |
 | `wait_for` | block until a control appears, disappears or becomes enabled |
 | `find_text` | OCR the screen, return text with coordinates — for apps with no UI tree |
 | `act` + `allow_ocr` | when the UI tree has no match, click what OCR read instead (opt-in) |
@@ -467,8 +467,11 @@ one screen with a TextEdit window behind a full-width Safari window:
 - **It sees covered windows.** The same canary was unreadable in a desktop
   capture, because Safari was on top of it, and read correctly when scoped to
   the TextEdit window.
-- **It is about nine times cheaper.** 673×439 at ~393 tokens against the whole
-  desktop's 2056×1329 at ~3,643.
+- **It is about nine times cheaper** *on this screen*. 673×439 at ~393 tokens
+  against the whole desktop's 2056×1329 at ~3,643. The gap is that wide only
+  because neither hit `max_width`; where the downscale binds - a 1920×1080
+  Windows desktop, say - a window and the whole desktop land within a few
+  hundred tokens of each other.
 
 A window that has moved since the last `windows` call is refused - "0 shareable
 windows match ... call windows again" - rather than captured from wherever it
