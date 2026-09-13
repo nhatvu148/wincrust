@@ -306,7 +306,7 @@ async fn main() -> Result<()> {
                         .discover(uia::DiscoverArgs {
                             hwnd,
                             max_depth: 24,
-                            max_elements: 400,
+                            max_elements: server::OBSERVE_TREE_ELEMENTS,
                             ttl_secs: 60,
                             filter: uia::Filter::Actionable,
                             verbose: false,

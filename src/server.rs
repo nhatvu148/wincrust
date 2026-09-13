@@ -47,6 +47,59 @@ pub struct DiscoverParams {
     pub menu_depth: Option<u32>,
 }
 
+/// How much of a window's tree `observe detail=text` is allowed to return.
+///
+/// Far below `discover`'s 400, because the two answer different questions.
+/// `discover` is what you run when you are about to act and need every
+/// control; `observe` is orientation - what is in front of me, roughly what is
+/// in it - and orientation that costs more than a screenshot is not worth
+/// having.
+///
+/// Measured against a live server, tokens per call, screenshot baseline
+/// ~1,400:
+///
+/// ```text
+///                    20      40      60     400
+///   File Explorer   781   1,493   2,189  14,245
+///   Task Manager    811   1,519   2,169   4,690
+///   Chrome          792   1,173   1,176   1,173
+///   Notepad         698     739     742     739
+/// ```
+///
+/// The tree is the observation whose cost scales - roughly 35 tokens an
+/// element - while the image is fixed whatever is on screen. At 400 a dense
+/// window costs ten screenshots and still comes back truncated.
+///
+/// 40 rather than 20, which was tried first and measured end to end at a very
+/// tight 1,157-1,271 tokens for every window. The reason not to keep it is the
+/// `truncated` flag: at 20 it was set on all four windows, including Chrome
+/// (31 actionable controls) and Notepad (22), and a flag that is always set
+/// carries nothing. It should mean "this window is denser than a sketch can
+/// hold", and at 40 it does - Chrome and Notepad come back whole, File
+/// Explorer (568) and Task Manager (139) say they were cut.
+///
+/// The cost of that is the dense case: ~1,950 rather than ~1,250, so about
+/// 40% over a screenshot rather than just under one. Worth it. The target was
+/// never to beat an image on price - it was to stop `observe` costing ten of
+/// them, and 7.4x of the 11.9x survives.
+///
+/// A capped walk sets `truncated`, so a caller is told it saw a sketch rather
+/// than being handed a partial view that looks complete.
+///
+/// What it should NOT be read as is "call `discover` and you will get the
+/// rest". `discover` caps at 400 itself, and on a window dense enough to
+/// matter that is not the end of it: File Explorer holds 568 actionable
+/// elements, so `discover` truncates too and the complete tree costs 20,077
+/// tokens - fourteen screenshots for one observation. Raising `max_elements`
+/// buys the whole tree at exactly that price.
+///
+/// So on a dense window the answer is usually not to walk it at all. `act`
+/// resolves a selector, `wait_for` takes one, and `find_text` targets by
+/// string; none of them need the tree enumerated first. Dumping it is for when
+/// you genuinely do not know what is there, and it should be a decision rather
+/// than a reflex.
+pub const OBSERVE_TREE_ELEMENTS: usize = 40;
+
 /// Names the menus without pricing every discover like a menu dump.
 ///
 /// Depth 3 - the level that holds the actual commands - took a Chrome window
@@ -128,23 +181,37 @@ pub struct ObserveParams {
     /// screen), or "diff" (only what changed since the last observe).
     ///
     /// These are not three renderings of one answer and they do not cost the
-    /// same. "text" is a UIA tree - a few hundred elements of JSON - and it is
-    /// the only one whose cost does not scale with what happens to be on
-    /// screen. "image" encodes a PNG on every call, measured at roughly 2,700
-    /// tokens against roughly 100 for a `wait_for` result.
+    /// same. "image" is the FIXED one - a PNG at ~1,400 tokens whatever is on
+    /// screen. "text" is the one that scales, so it is capped: a sketch of at
+    /// most `OBSERVE_TREE_ELEMENTS` controls, ~1,200-2,000 tokens. It sets
+    /// `truncated` when the window held more, which is the signal to call
+    /// `discover` rather than to observe again.
     ///
-    /// Ask for "text" first. Escalate to "image" when the question is genuinely
-    /// visual: a viewport, a rendered document, a control the tree does not
-    /// expose, or a window whose tree came back empty. A run that screenshots
-    /// every step exhausts its context long before a GUI task is finished.
+    /// Ask for "text" first, because it names controls and returns a scope you
+    /// can act on where an image gives pixels you must guess at. When you are
+    /// about to act and need the whole tree, call `discover` - that is the
+    /// escalation. Ask for "image" when the question is genuinely visual: a
+    /// viewport, a rendered document, a control the tree does not expose, or a
+    /// window whose tree came back empty.
+    ///
+    /// Neither is the saving on a wait. `wait_for` is ~100 tokens against
+    /// ~1,400 for a poll, and a run that observes every step in any mode will
+    /// exhaust its context long before a GUI task is finished.
     pub detail: Option<String>,
     /// Downscale width before encoding. Default 1400; 0 for native.
     ///
-    /// Read only for "image" and "diff". Lowering it is the cheapest way to
-    /// make a visual read affordable, but OCR accuracy falls off with it, and
-    /// `find_text` is the better instrument when the target is text. Passing
-    /// `hwnd` is the larger saving: one window was measured at ~393 tokens
-    /// against ~3,643 for the whole desktop.
+    /// Read only for "image" and "diff", and it is the only knob that moves a
+    /// visual read's cost much: the PNG is downscaled to this width before
+    /// encoding, so the token count follows it and not how much is on screen.
+    /// Lowering it is the cheapest way to make an image affordable, but OCR
+    /// accuracy falls off with it, and `find_text` is the better instrument
+    /// when the target is text.
+    ///
+    /// Cropping with `hwnd` saves less than it looks like it should, because
+    /// this width dominates: on Windows a single window and the whole desktop
+    /// measured within a few hundred tokens of each other. The ~393 against
+    /// ~3,643 figure in the README is macOS, where the window was small enough
+    /// that no downscale applied.
     pub max_width: Option<u32>,
     /// Scope the read to one window instead of the whole desktop.
     ///
@@ -408,20 +475,26 @@ impl Wincrust {
 
     #[tool(
         name = "observe",
-        description = "See the screen. THREE detail levels, cheapest first. `text` (the \
-                       DEFAULT) returns the window list plus the focused window's actionable UIA \
-                       elements, and costs the same whatever is on screen. `diff` returns nothing \
-                       at all when nothing has changed, which is what a wait should use. `image` \
-                       encodes a full PNG every call - roughly 2,700 tokens a shot, against \
-                       roughly 100 for a `wait_for` result. Reach for `text` first and escalate \
-                       only when the question is actually visual: a viewport, a rendered \
-                       document, a control the tree does not expose, or a window whose tree came \
-                       back empty. Most steps in a GUI task are decided by the tree, and a run \
-                       that screenshots every step will exhaust its context long before the task \
-                       is done. Pass `hwnd` whenever you already know the target: under `text` \
-                       it walks that window instead of whichever one the OS calls focused, and \
-                       under `image` it cuts the read further - one window measured ~393 tokens \
-                       against ~3,643 for the desktop. WITHOUT `hwnd` an image read \
+        description = "See the screen. `text` (the DEFAULT) is the window list plus a CAPPED \
+                       sketch of one window's actionable tree - about 40 controls, ~1,200-2,000 \
+                       tokens, and it sets `truncated` when the window held more. `truncated` \
+                       is not a promise that `discover` finishes the job - it caps at 400 \
+                       itself, and a dense window blows through that too - one measured 568 \
+                       elements and 20,077 tokens for the complete tree. On a window that big, \
+                       act by selector instead (`act`, `wait_for`) or target text with \
+                       `find_text`; none of those need the tree enumerated. Prefer `text`: it \
+                       names controls and \
+                       returns a scope you can act on, where an image hands you pixels you then \
+                       have to guess at. When you are about to act and need the FULL tree, call \
+                       `discover` - that is the escalation, not a bigger `observe`. `image` \
+                       costs about the same whatever is on screen, because the PNG is downscaled \
+                       to `max_width` first; ask for it when the question is genuinely visual - \
+                       a viewport, a rendered document, a control the tree does not expose, or a \
+                       window whose tree came back empty. `diff` returns nothing at all when the \
+                       screen has not changed. On a wait use `wait_for` (~100 tokens), never a \
+                       poll in any mode. Pass `hwnd` when you know the target: under `text` it \
+                       sketches that window rather than whichever one the OS calls focused. \
+                       WITHOUT `hwnd` an image read \
                        reads the desktop, which does NOT contain hardware-accelerated content: an \
                        OpenGL or Direct3D viewport comes back as flat colour that looks exactly \
                        like an empty one. `hwnd` renders that window on demand instead, which \
@@ -449,7 +522,7 @@ impl Wincrust {
                 .discover(uia::DiscoverArgs {
                     hwnd: p.hwnd,
                     max_depth: 24,
-                    max_elements: 400,
+                    max_elements: OBSERVE_TREE_ELEMENTS,
                     ttl_secs: crate::lease::DEFAULT_TTL_SECS,
                     filter: uia::Filter::Actionable,
                     verbose: false,
