@@ -421,7 +421,7 @@ impl Wincrust {
                        is done. Pass `hwnd` whenever you already know the target: under `text` \
                        it walks that window instead of whichever one the OS calls focused, and \
                        under `image` it cuts the read further - one window measured ~393 tokens \
-                       against ~3,643 for the desktop. WITHOUT `hwnd` an image read does this \
+                       against ~3,643 for the desktop. WITHOUT `hwnd` an image read \
                        reads the desktop, which does NOT contain hardware-accelerated content: an \
                        OpenGL or Direct3D viewport comes back as flat colour that looks exactly \
                        like an empty one. `hwnd` renders that window on demand instead, which \
