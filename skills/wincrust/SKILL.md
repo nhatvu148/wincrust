@@ -91,6 +91,27 @@ Do not report success from `ok: true` alone.
   Re-discover; do not reuse the old scope.
 - **`stopped`** - the emergency stop is engaged. Do not work around it.
 
+## Looking at the screen costs different amounts
+
+`observe` defaults to `detail=text` - the window list plus one window's
+actionable tree - and that is the right default. Most steps in a GUI
+task are decided by the tree: which controls exist, what they are called,
+whether the one you want is enabled yet. Its cost is flat whatever is on
+screen.
+
+Escalate to `detail=image` only when the question is genuinely visual: a
+viewport, a rendered document, a control the tree does not expose, or a window
+whose tree came back empty. It costs ~2,700 tokens every call.
+
+Pass `hwnd` whenever you already know the target, at any detail level. Under
+`text` it walks that window rather than whichever one the OS calls focused -
+which is whatever was last clicked, and not something to build on. Under
+`image` it also cuts the read: one window measured ~393 tokens against ~3,643
+for the whole desktop. Either way `tree.window` names what was actually read.
+
+A run that screenshots every step exhausts its context long before the task is
+done. That is the single most common way one of these sessions dies.
+
 ## A blank viewport is not evidence of an empty one
 
 `observe` reads the desktop surface, and hardware-accelerated content - an

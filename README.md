@@ -58,7 +58,7 @@ required. The reason is what elevation does to the cost of a large dependency tr
 | `discover` | actionable elements + a signed scope |
 | `act` | click / type / toggle / expand / select, via UIA control patterns |
 | `act` + `key` | send keystrokes to a resolved control — `Enter`, `Ctrl+S`, `F5` |
-| `observe` | `text` \| `image` \| `diff` |
+| `observe` | `text` (default, flat cost) \| `image` (~2,700 tokens a shot) \| `diff` |
 | `wait_for` | block until a control appears, disappears or becomes enabled |
 | `find_text` | OCR the screen, return text with coordinates — for apps with no UI tree |
 | `act` + `allow_ocr` | when the UI tree has no match, click what OCR read instead (opt-in) |
