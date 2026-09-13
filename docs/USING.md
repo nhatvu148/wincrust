@@ -96,7 +96,7 @@ answer:
 
 | detail | what it returns | cost |
 |---|---|---|
-| `text` *(default)* | window list + a **capped** sketch of one window's tree, ~20 controls | ~700-1,300 tokens; sets `truncated` when there was more |
+| `text` *(default)* | window list + a **capped** sketch of one window's tree, ~40 controls | ~1,200-2,000 tokens; sets `truncated` when there was more |
 | `diff` | only what changed since the last observe | nothing at all when nothing changed |
 | `image` | a full PNG | ~1,400 tokens, near-fixed |
 
@@ -117,9 +117,15 @@ Measured against a live server, tokens per call:
 | Notepad | 698 | 739 | 1,366 |
 
 At 400 a dense window cost ten screenshots **and still came back truncated**.
-So `observe detail=text` is capped at about 20 controls: enough to orient -
-what is in front of me, roughly what is in it - while staying inside what a
-screenshot would have cost. It sets `truncated` when it had more to say.
+So `observe detail=text` is capped at about 40 controls: enough to orient -
+what is in front of me, roughly what is in it - while holding the dense case
+to roughly one and a half screenshots instead of ten.
+
+A cap of 20 was tried first and measured tighter still, 1,157-1,271 tokens for
+every window. It was rejected because it set `truncated` on all of them,
+including windows with only ~25 controls, and a flag that is always set tells
+a caller nothing. At 40 it means what it should: this window is denser than a
+sketch can hold, so call `discover`.
 
 `text` is still the default, because it names controls and hands back a scope
 you can `act` on where an image gives pixels you must guess at. But the reason

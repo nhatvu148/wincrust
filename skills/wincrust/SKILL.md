@@ -99,12 +99,15 @@ screen. A tree costs roughly 35 tokens an element. Measured: File Explorer's
 full 400-element tree was **14,245 tokens** - ten screenshots - and still came
 back truncated.
 
-So `observe detail=text` returns a **capped sketch**, about 20 controls, and
-sets `truncated` when there was more. It is the default because it names
+So `observe detail=text` returns a **capped sketch**, about 40 controls, and
+sets `truncated` when the window held more. It is the default because it names
 controls and hands back a scope you can `act` on, where an image gives pixels
 you must guess at - not because it is free.
 
-- **Orienting** - "what is in front of me" - `observe`. ~700-1,300 tokens.
+**`truncated` is the signal to call `discover`.** It is not set on every
+window, so when you see it the window really is denser than a sketch can hold.
+
+- **Orienting** - "what is in front of me" - `observe`. ~1,200-2,000 tokens.
 - **About to act, need every control** - `discover`. That is the escalation,
   not a bigger `observe`.
 - **The question is genuinely visual** - a viewport, a rendered document, a

@@ -68,13 +68,24 @@ pub struct DiscoverParams {
 ///
 /// The tree is the observation whose cost scales - roughly 35 tokens an
 /// element - while the image is fixed whatever is on screen. At 400 a dense
-/// window costs ten screenshots and still comes back truncated. At 20 every
-/// window measured fits inside one, and a window with fewer than 20 actionable
-/// controls loses nothing at all.
+/// window costs ten screenshots and still comes back truncated.
+///
+/// 40 rather than 20, which was tried first and measured end to end at a very
+/// tight 1,157-1,271 tokens for every window. The reason not to keep it is the
+/// `truncated` flag: at 20 it was set on all four windows, including Chrome
+/// (~45 actionable controls) and Notepad (~25), and a flag that is always set
+/// carries nothing. It should mean "this window is denser than a sketch can
+/// hold, go call `discover`", and at 40 it does - Chrome and Notepad come back
+/// whole, File Explorer and Task Manager say they were cut.
+///
+/// The cost of that is the dense case: ~1,950 rather than ~1,250, so about
+/// 40% over a screenshot rather than just under one. Worth it. The target was
+/// never to beat an image on price - it was to stop `observe` costing ten of
+/// them, and 7.4x of the 11.9x survives.
 ///
 /// A capped walk sets `truncated`, so a caller is told it saw a sketch and can
 /// call `discover` for the rest. That is the escalation, and it is one call.
-pub const OBSERVE_TREE_ELEMENTS: usize = 20;
+pub const OBSERVE_TREE_ELEMENTS: usize = 40;
 
 /// Names the menus without pricing every discover like a menu dump.
 ///
@@ -159,9 +170,9 @@ pub struct ObserveParams {
     /// These are not three renderings of one answer and they do not cost the
     /// same. "image" is the FIXED one - a PNG at ~1,400 tokens whatever is on
     /// screen. "text" is the one that scales, so it is capped: a sketch of at
-    /// most `OBSERVE_TREE_ELEMENTS` controls, which keeps it inside that same
-    /// budget on the densest window measured. It sets `truncated` when there
-    /// was more to say.
+    /// most `OBSERVE_TREE_ELEMENTS` controls, ~1,200-2,000 tokens. It sets
+    /// `truncated` when the window held more, which is the signal to call
+    /// `discover` rather than to observe again.
     ///
     /// Ask for "text" first, because it names controls and returns a scope you
     /// can act on where an image gives pixels you must guess at. When you are
@@ -452,9 +463,9 @@ impl Wincrust {
     #[tool(
         name = "observe",
         description = "See the screen. `text` (the DEFAULT) is the window list plus a CAPPED \
-                       sketch of one window's actionable tree - about 20 controls, which keeps \
-                       it inside a screenshot's budget on the densest window measured, and it \
-                       sets `truncated` when there was more. Prefer it: it names controls and \
+                       sketch of one window's actionable tree - about 40 controls, ~1,200-2,000 \
+                       tokens, and it sets `truncated` when the window held more. Treat that \
+                       flag as the signal to call `discover`. Prefer it: it names controls and \
                        returns a scope you can act on, where an image hands you pixels you then \
                        have to guess at. When you are about to act and need the FULL tree, call \
                        `discover` - that is the escalation, not a bigger `observe`. `image` \
