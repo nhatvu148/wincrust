@@ -96,25 +96,51 @@ answer:
 
 | detail | what it returns | cost |
 |---|---|---|
-| `text` *(default)* | window list + one window's actionable UIA tree | flat - does not scale with what is on screen |
+| `text` *(default)* | window list + a **capped** sketch of one window's tree, ~20 controls | ~700-1,300 tokens; sets `truncated` when there was more |
 | `diff` | only what changed since the last observe | nothing at all when nothing changed |
-| `image` | a full PNG | ~2,700 tokens every call |
+| `image` | a full PNG | ~1,400 tokens, near-fixed |
 
-`text` is the default because most steps in a GUI task are decided by the
-tree, not by pixels: which controls exist, what they are called, whether the
-one you want is enabled yet. Escalate to `image` when the question is
-genuinely visual - a viewport, a rendered document, a control with no tree
+**The image is the fixed-cost read; the tree is the one that scales.** That is
+the opposite of what this section used to claim, and the correction is worth
+stating plainly because it changes which call is the cheap one. A PNG is
+downscaled to `max_width` before encoding, so it costs about the same whatever
+is on screen. A tree costs roughly 35 tokens an element, which on a dense
+window is unbounded in practice.
+
+Measured against a live server, tokens per call:
+
+| window | tree @20 | tree @400 (the old `observe`) | image |
+|---|---|---|---|
+| File Explorer | 781 | **14,245** | 1,400 |
+| Task Manager | 811 | 4,690 | 1,287 |
+| Chrome | 792 | 1,173 | 1,610 |
+| Notepad | 698 | 739 | 1,366 |
+
+At 400 a dense window cost ten screenshots **and still came back truncated**.
+So `observe detail=text` is capped at about 20 controls: enough to orient -
+what is in front of me, roughly what is in it - while staying inside what a
+screenshot would have cost. It sets `truncated` when it had more to say.
+
+`text` is still the default, because it names controls and hands back a scope
+you can `act` on where an image gives pixels you must guess at. But the reason
+is usefulness per token, not a flat cost it never had.
+
+**When you are about to act and need the whole tree, call `discover`.** That is
+the escalation - not a bigger `observe`. Escalate to `image` when the question
+is genuinely visual: a viewport, a rendered document, a control with no tree
 entry, or a window whose tree came back empty.
 
-Passing `hwnd` is the other lever, and it applies to every detail level.
-Under `text` it walks that window's tree instead of whichever window the OS
-currently calls focused - so pass it whenever you already know the target,
-because "the focused window" is whatever the user last clicked and is not a
-claim you want to build on. The returned `tree.window` always names what was
-actually walked. Under `image` it also cuts the read: one window was measured
-at **~393 tokens** against **~3,643** for the whole desktop. A run that
-screenshots the entire desktop at every step will exhaust its context long
-before the task is finished.
+Pass `hwnd` whenever you know the target. Under `text` it sketches that window
+instead of whichever one the OS calls focused - "the focused window" is
+whatever the user last clicked and is not a claim to build on - and
+`tree.window` always names what was actually walked. Under `image` it helps
+less than you would expect, because `max_width` dominates: on Windows a single
+window and the whole desktop measured within a few hundred tokens of each
+other. The **~393 against ~3,643** figure below is macOS, where the window was
+small enough that no downscale applied.
+
+On a wait, neither is the answer: `wait_for` is ~100 tokens against ~1,400 for
+a poll.
 
 The CLI keeps `image` as its default, which is not an inconsistency. `wincrust
 observe` writes the PNG to a file and prints metadata - a human at a terminal

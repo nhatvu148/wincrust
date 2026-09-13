@@ -93,24 +93,28 @@ Do not report success from `ok: true` alone.
 
 ## Looking at the screen costs different amounts
 
-`observe` defaults to `detail=text` - the window list plus one window's
-actionable tree - and that is the right default. Most steps in a GUI
-task are decided by the tree: which controls exist, what they are called,
-whether the one you want is enabled yet. Its cost is flat whatever is on
-screen.
+**The image is the fixed-cost read; the tree is the one that scales.** A PNG
+is downscaled to `max_width` first, so it costs ~1,400 tokens whatever is on
+screen. A tree costs roughly 35 tokens an element. Measured: File Explorer's
+full 400-element tree was **14,245 tokens** - ten screenshots - and still came
+back truncated.
 
-Escalate to `detail=image` only when the question is genuinely visual: a
-viewport, a rendered document, a control the tree does not expose, or a window
-whose tree came back empty. It costs ~2,700 tokens every call.
+So `observe detail=text` returns a **capped sketch**, about 20 controls, and
+sets `truncated` when there was more. It is the default because it names
+controls and hands back a scope you can `act` on, where an image gives pixels
+you must guess at - not because it is free.
 
-Pass `hwnd` whenever you already know the target, at any detail level. Under
-`text` it walks that window rather than whichever one the OS calls focused -
-which is whatever was last clicked, and not something to build on. Under
-`image` it also cuts the read: one window measured ~393 tokens against ~3,643
-for the whole desktop. Either way `tree.window` names what was actually read.
+- **Orienting** - "what is in front of me" - `observe`. ~700-1,300 tokens.
+- **About to act, need every control** - `discover`. That is the escalation,
+  not a bigger `observe`.
+- **The question is genuinely visual** - a viewport, a rendered document, a
+  control with no tree entry, an empty tree - `detail=image`.
+- **Waiting** - `wait_for`, ~100 tokens. Never poll in any mode.
 
-A run that screenshots every step exhausts its context long before the task is
-done. That is the single most common way one of these sessions dies.
+Pass `hwnd` whenever you know the target: under `text` it sketches that window
+rather than whichever one the OS calls focused, which is whatever was last
+clicked. `tree.window` names what was actually read. Under `image` it saves
+less than you would think, because `max_width` dominates.
 
 ## A blank viewport is not evidence of an empty one
 
